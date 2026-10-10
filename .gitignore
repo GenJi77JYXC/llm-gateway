@@ -1,0 +1,19 @@
+# 二进制
+bin/
+*.exe
+*.exe~
+
+# 本地环境与配置
+.env
+configs/config.yaml
+
+# 本地设计笔记/学习文档，不公开
+docs/
+
+# 测试与覆盖率
+*.out
+coverage.txt
+
+# IDE
+.idea/
+.vscode/

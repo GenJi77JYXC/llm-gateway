@@ -1,0 +1,58 @@
+name: llm-gateway
+
+# 本地开发栈：app + prometheus + grafana + redis
+# redis 在 Week 1 暂未被应用使用，Week 3 缓存功能启用。
+# 使用前：cp configs/config.example.yaml configs/config.yaml 并按需修改；
+#         cp .env.example .env 填入上游 API Key。
+
+services:
+  app:
+    build: .
+    container_name: llmgw-app
+    env_file: .env
+    environment:
+      GIN_MODE: release
+    volumes:
+      - ./configs/config.yaml:/app/configs/config.yaml:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: llmgw-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: llmgw-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # Week 3 缓存启用后使用（精确缓存 + 语义向量检索）
+  redis:
+    image: redis/redis-stack:7.4.0-v0
+    container_name: llmgw-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    restart: unless-stopped
+
+volumes:
+  promdata:

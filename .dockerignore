@@ -1,0 +1,5 @@
+bin/
+.git/
+*.md
+.env
+configs/config.yaml

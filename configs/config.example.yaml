@@ -1,0 +1,31 @@
+# LLM 网关配置示例
+# 复制为 config.yaml 并填入真实 key（或通过环境变量注入，推荐后者）。
+# ${ENV_VAR} 形式的占位符会从环境变量展开。
+
+server:
+  addr: ":8080"
+
+auth:
+  # 调用方访问本网关时使用的 key（Authorization: Bearer <client_key>）
+  # 生产环境务必改成强随机值
+  client_keys:
+    - "sk-gateway-dev-123456"
+
+providers:
+  # DeepSeek：OpenAI 兼容协议，便宜，适合开发联调
+  - name: deepseek
+    type: openai
+    base_url: "https://api.deepseek.com/v1"
+    api_key: "${DEEPSEEK_API_KEY}"
+    models:
+      - "deepseek-chat"
+      - "deepseek-reasoner"
+
+  # OpenAI：没有 key 可整段删除
+  - name: openai
+    type: openai
+    base_url: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY}"
+    models:
+      - "gpt-4o-mini"
+      - "gpt-4o"
