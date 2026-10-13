@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Server    ServerConfig     `yaml:"server"`
 	Auth      AuthConfig       `yaml:"auth"`
+	RateLimit RateLimitConfig  `yaml:"rate_limit"`
 	Providers []ProviderConfig `yaml:"providers"`
 }
 
@@ -28,6 +29,19 @@ type ServerConfig struct {
 type AuthConfig struct {
 	// ClientKeys 允许访问网关的 key 列表（Authorization: Bearer <key>）
 	ClientKeys []string `yaml:"client_keys"`
+}
+
+// RateLimitConfig 是双维度令牌桶限流配置（可选）。
+// 任一维度 QPS <= 0 表示该维度不限流；缺省整段省略即完全不限流。
+type RateLimitConfig struct {
+	// KeyQPS 每个 client key 的请求速率（次/秒）
+	KeyQPS float64 `yaml:"key_qps"`
+	// KeyBurst key 维度突发容量，缺省按 max(1, KeyQPS) 处理
+	KeyBurst int `yaml:"key_burst"`
+	// ModelQPS 每个 model 的全局请求速率（所有 key 共享）
+	ModelQPS float64 `yaml:"model_qps"`
+	// ModelBurst model 维度突发容量，缺省按 max(1, ModelQPS) 处理
+	ModelBurst int `yaml:"model_burst"`
 }
 
 // ProviderConfig 描述一个模型上游。
@@ -76,6 +90,14 @@ func (c *Config) validate() error {
 	}
 	if len(c.Providers) == 0 {
 		return fmt.Errorf("providers 至少配置一个上游")
+	}
+
+	// 限流 burst 缺省补齐为对应 QPS（至少 1），保证限流器有可用突发容量
+	if c.RateLimit.KeyQPS > 0 && c.RateLimit.KeyBurst <= 0 {
+		c.RateLimit.KeyBurst = max(1, int(c.RateLimit.KeyQPS))
+	}
+	if c.RateLimit.ModelQPS > 0 && c.RateLimit.ModelBurst <= 0 {
+		c.RateLimit.ModelBurst = max(1, int(c.RateLimit.ModelQPS))
 	}
 
 	seenNames := make(map[string]struct{}, len(c.Providers))

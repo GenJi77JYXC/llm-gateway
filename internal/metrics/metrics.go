@@ -69,6 +69,13 @@ var (
 		Name:      "breaker_state",
 		Help:      "Circuit breaker state per upstream (0=closed, 1=open, 2=half_open).",
 	}, []string{"provider"})
+
+	// RateLimitedTotal 被限流拒绝的请求数，dimension=key|model。
+	RateLimitedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "rate_limited_total",
+		Help:      "Requests rejected by rate limiting.",
+	}, []string{"dimension"})
 )
 
 // StreamLabel 将 bool 转为指标 label，避免调用处散落字符串。

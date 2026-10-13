@@ -31,7 +31,8 @@ func NewHandler(r *gateway.Router) *Handler {
 }
 
 // RegisterRoutes 在给定 gin 引擎上注册全部路由。
-func (h *Handler) RegisterRoutes(engine *gin.Engine, clientKeys []string) {
+// limiter 启用时仅对 chat completions 生效（/v1/models 等轻量接口不限流）。
+func (h *Handler) RegisterRoutes(engine *gin.Engine, clientKeys []string, limiter *middleware.RateLimiter) {
 	engine.GET("/healthz", h.healthz)
 	engine.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
@@ -39,7 +40,11 @@ func (h *Handler) RegisterRoutes(engine *gin.Engine, clientKeys []string) {
 	v1.Use(middleware.ClientAuth(clientKeys))
 	{
 		v1.GET("/models", h.listModels)
-		v1.POST("/chat/completions", h.chatCompletions)
+		if limiter != nil && limiter.Enabled() {
+			v1.POST("/chat/completions", limiter.Middleware(), h.chatCompletions)
+		} else {
+			v1.POST("/chat/completions", h.chatCompletions)
+		}
 	}
 }
 

@@ -11,6 +11,13 @@ auth:
   client_keys:
     - "sk-gateway-dev-123456"
 
+# 双维度令牌桶限流（可选，缺省整段省略即不限流）
+# rate_limit:
+#   key_qps: 5        # 每个 client key 每秒请求数
+#   key_burst: 10     # key 维度突发容量，缺省 = key_qps（至少 1）
+#   model_qps: 20     # 每个 model 全局每秒请求数（所有 key 共享）
+#   model_burst: 40   # model 维度突发容量，缺省 = model_qps
+
 providers:
   # DeepSeek：OpenAI 兼容协议，便宜，适合开发联调
   - name: deepseek

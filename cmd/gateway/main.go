@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/GenJi77JYXC/llm-gateway/internal/api"
+	"github.com/GenJi77JYXC/llm-gateway/internal/api/middleware"
 	"github.com/GenJi77JYXC/llm-gateway/internal/config"
 	"github.com/GenJi77JYXC/llm-gateway/internal/gateway"
 	"github.com/GenJi77JYXC/llm-gateway/internal/provider/openai"
@@ -42,15 +43,16 @@ func main() {
 	}
 	r := gateway.NewRouter(upstreams)
 
-	server := api.NewHTTPServer(cfg.Server.Addr, cfg.Auth.ClientKeys, r)
+	limiter := middleware.NewRateLimiter(cfg.RateLimit)
+	server := api.NewHTTPServer(cfg.Server.Addr, cfg.Auth.ClientKeys, r, limiter)
 
 	// 优雅停机：收到 SIGINT/SIGTERM 后停止接收新连接，等待在途请求完成（最多 15s）
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	go func() {
-		log.Printf("llm-gateway listening on %s (providers: %d, models: %d)",
-			cfg.Server.Addr, len(cfg.Providers), len(r.Models()))
+		log.Printf("llm-gateway listening on %s (providers: %d, models: %d, rate_limit: %v)",
+			cfg.Server.Addr, len(cfg.Providers), len(r.Models()), limiter.Enabled())
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("server error: %v", err)
 		}
