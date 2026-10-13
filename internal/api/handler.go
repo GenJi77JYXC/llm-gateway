@@ -252,7 +252,7 @@ func (h *Handler) writeCallError(c *gin.Context, err error) string {
 	}
 	// 传输层错误（DNS/连接失败/ctx 取消等）
 	writeAPIError(c, http.StatusBadGateway, err.Error(), "upstream_error", "bad_gateway")
-	return "internal_error"
+	return "upstream_error"
 }
 
 // writeAPIError 写出 OpenAI 风格错误。
