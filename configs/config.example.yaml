@@ -20,6 +20,15 @@ providers:
     models:
       - "deepseek-chat"
       - "deepseek-reasoner"
+    # weight：负载均衡权重，缺省为 1。
+    # 同一个 model 可配置在多个上游中，按 weight 平滑加权轮询分发，
+    # 例如下面 deepseek 和 deepseek-backup 都服务 deepseek-chat，按 3:1 分流：
+    #   - name: deepseek-backup
+    #     base_url: "https://api.siliconflow.cn/v1"
+    #     api_key: "${SILICONFLOW_API_KEY}"
+    #     models: ["deepseek-chat"]
+    #     weight: 1
+    weight: 3
 
   # OpenAI：没有 key 可整段删除
   - name: openai
@@ -29,3 +38,4 @@ providers:
     models:
       - "gpt-4o-mini"
       - "gpt-4o"
+    weight: 1

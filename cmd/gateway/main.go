@@ -16,7 +16,6 @@ import (
 	"github.com/GenJi77JYXC/llm-gateway/internal/api"
 	"github.com/GenJi77JYXC/llm-gateway/internal/config"
 	"github.com/GenJi77JYXC/llm-gateway/internal/gateway"
-	"github.com/GenJi77JYXC/llm-gateway/internal/provider"
 	"github.com/GenJi77JYXC/llm-gateway/internal/provider/openai"
 )
 
@@ -31,16 +30,17 @@ func main() {
 
 	// 所有 OpenAI 兼容上游共享一个连接池
 	httpClient := openai.DefaultHTTPClient()
-	providers := make([]provider.Provider, 0, len(cfg.Providers))
+	upstreams := make([]gateway.Upstream, 0, len(cfg.Providers))
 	for _, pc := range cfg.Providers {
-		providers = append(providers, openai.New(openai.Config{
+		p := openai.New(openai.Config{
 			Name:    pc.Name,
 			BaseURL: pc.BaseURL,
 			APIKey:  pc.APIKey,
 			Models:  pc.Models,
-		}, httpClient))
+		}, httpClient)
+		upstreams = append(upstreams, gateway.Upstream{Provider: p, Weight: pc.Weight})
 	}
-	r := gateway.NewRouter(providers)
+	r := gateway.NewRouter(upstreams)
 
 	server := api.NewHTTPServer(cfg.Server.Addr, cfg.Auth.ClientKeys, r)
 

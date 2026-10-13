@@ -6,39 +6,58 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/GenJi77JYXC/llm-gateway/internal/balancer"
 	"github.com/GenJi77JYXC/llm-gateway/internal/provider"
 )
 
-// Router 按 model 字段选择 Provider。
-// Week 1：一个模型只对应一个上游（config 校验已保证）；
-// Week 2 将在此引入候选列表 + 负载均衡/熔断，对外接口保持不变。
-type Router struct {
-	byModel map[string]provider.Provider
-	byName  map[string]provider.Provider
-	models  []string // 排好序，保证 /v1/models 输出稳定
+// Upstream 是某个模型的一个候选上游：Provider 实例 + 配置权重。
+type Upstream struct {
+	Provider provider.Provider
+	// Weight 负载均衡权重，<=0 时按 1 处理
+	Weight int
 }
 
-// NewRouter 构造路由器。
-func NewRouter(providers []provider.Provider) *Router {
+// Router 按 model 字段选择 Provider。
+// Week 2：一个模型可对应多个候选上游，按平滑加权轮询分发；
+// 后续将在此引入熔断候选过滤 + fallback，对外接口保持不变。
+type Router struct {
+	byModel map[string]*balancer.Weighted[provider.Provider]
+	owners  map[string]string // model -> 首个注册的 provider 名（/v1/models 展示用）
+	models  []string          // 排好序，保证 /v1/models 输出稳定
+}
+
+// NewRouter 构造路由器。同一模型的多个上游按 weight 加权轮询。
+func NewRouter(upstreams []Upstream) *Router {
 	r := &Router{
-		byModel: make(map[string]provider.Provider, len(providers)),
-		byName:  make(map[string]provider.Provider, len(providers)),
+		byModel: make(map[string]*balancer.Weighted[provider.Provider]),
+		owners:  make(map[string]string),
 	}
-	for _, p := range providers {
-		r.byName[p.Name()] = p
-		for _, m := range p.Models() {
-			r.byModel[m] = p
-			r.models = append(r.models, m)
+
+	// 按 model 分组收集候选（保持配置顺序，首个注册者作为 owner）
+	candidates := make(map[string][]provider.Provider)
+	weights := make(map[string][]int)
+	for _, u := range upstreams {
+		for _, m := range u.Provider.Models() {
+			if _, ok := candidates[m]; !ok {
+				r.models = append(r.models, m)
+				r.owners[m] = u.Provider.Name()
+			}
+			candidates[m] = append(candidates[m], u.Provider)
+			weights[m] = append(weights[m], u.Weight)
 		}
+	}
+	for m, ps := range candidates {
+		r.byModel[m] = balancer.NewWeighted(ps, weights[m])
 	}
 	sort.Strings(r.models)
 	return r
 }
 
-// Pick 按模型名选择 Provider，未找到返回 ErrModelNotFound。
+// Pick 按模型名加权轮询选出一个 Provider，未找到返回 ErrModelNotFound。
+// 每次调用都可能返回不同上游（按权重轮转），调用方不应缓存结果。
 func (r *Router) Pick(model string) (provider.Provider, error) {
-	if p, ok := r.byModel[model]; ok {
-		return p, nil
+	if w, ok := r.byModel[model]; ok {
+		return w.Next(), nil
 	}
 	return nil, &ErrModelNotFound{Model: model}
 }
@@ -50,10 +69,11 @@ func (r *Router) Models() []string {
 	return out
 }
 
-// Owner 返回模型所属的 Provider 名，未知模型返回 "unknown"。
+// Owner 返回模型首个注册的 Provider 名，未知模型返回 "unknown"。
+// 一个模型有多个上游时仅作展示用途，不代表实际路由结果。
 func (r *Router) Owner(model string) string {
-	if p, ok := r.byModel[model]; ok {
-		return p.Name()
+	if name, ok := r.owners[model]; ok {
+		return name
 	}
 	return "unknown"
 }

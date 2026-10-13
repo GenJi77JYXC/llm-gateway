@@ -33,6 +33,7 @@ type AuthConfig struct {
 // ProviderConfig 描述一个模型上游。
 // Week 1 所有上游均为 OpenAI 兼容协议（DeepSeek/OpenAI/通义等），
 // 仅靠 base_url/api_key/models 区分，type 字段预留给后续非兼容厂商。
+// Week 2 起同一个 model 可配置在多个上游中，按 weight 加权轮询分发。
 type ProviderConfig struct {
 	// Name 上游实例名，用于日志与指标 label，如 deepseek、openai
 	Name string `yaml:"name"`
@@ -44,6 +45,8 @@ type ProviderConfig struct {
 	APIKey string `yaml:"api_key"`
 	// Models 该上游支持的模型名（客户端请求中的 model 字段）
 	Models []string `yaml:"models"`
+	// Weight 负载均衡权重（同一 model 的多个上游之间生效），<=0 时按 1 处理
+	Weight int `yaml:"weight"`
 }
 
 // Load 从 path 读取 YAML 配置，展开其中的 ${ENV} 或 $ENV 环境变量后解析。
@@ -76,7 +79,6 @@ func (c *Config) validate() error {
 	}
 
 	seenNames := make(map[string]struct{}, len(c.Providers))
-	seenModels := make(map[string]string)
 	for i := range c.Providers {
 		p := &c.Providers[i]
 		if p.Name == "" {
@@ -103,12 +105,10 @@ func (c *Config) validate() error {
 		if len(p.Models) == 0 {
 			return fmt.Errorf("provider %s 至少配置一个 model", p.Name)
 		}
-		for _, m := range p.Models {
-			if owner, ok := seenModels[m]; ok {
-				return fmt.Errorf("model %s 同时配置在 provider %s 和 %s，Week 1 一个模型只能路由到一个上游", m, owner, p.Name)
-			}
-			seenModels[m] = p.Name
+		if p.Weight <= 0 {
+			p.Weight = 1
 		}
+		// 注意：Week 2 起允许同一 model 出现在多个上游（按 weight 负载均衡）
 	}
 	return nil
 }
