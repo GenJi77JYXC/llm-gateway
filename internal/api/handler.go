@@ -76,44 +76,43 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 		return
 	}
 
-	p, err := h.router.Pick(prepared.Model)
-	if err != nil {
-		var notFound *gateway.ErrModelNotFound
-		if errors.As(err, &notFound) {
-			writeAPIError(c, http.StatusBadRequest, err.Error(), "invalid_request_error", "model_not_found")
-			return
-		}
-		writeAPIError(c, http.StatusInternalServerError, err.Error(), "gateway_error", "")
-		return
-	}
-
-	providerName := p.Name()
-	modelName := prepared.Model
 	streamLabel := metrics.StreamLabel(prepared.Stream)
 	metrics.InflightRequests.WithLabelValues(streamLabel).Inc()
 	defer metrics.InflightRequests.WithLabelValues(streamLabel).Dec()
 
 	req := &provider.ChatRequest{
-		Model:  modelName,
+		Model:  prepared.Model,
 		Stream: prepared.Stream,
 		Body:   prepared.Body,
 	}
 
 	if prepared.Stream {
-		h.handleStream(c, p, req, providerName, modelName, startedAt)
+		h.handleStream(c, req, prepared.Model, startedAt)
 		return
 	}
-	h.handleBlocking(c, p, req, providerName, modelName, startedAt)
+	h.handleBlocking(c, req, prepared.Model, startedAt)
 }
 
-// handleBlocking 处理非流式请求：上游 body 原样透传。
+// handleBlocking 处理非流式请求：上游 body 原样透传。fallback 在 gateway 层完成。
 func (h *Handler) handleBlocking(
 	c *gin.Context,
-	p provider.Provider,
 	req *provider.ChatRequest,
-	providerName, modelName string,
+	modelName string,
 	startedAt time.Time,
 ) {
+	res, providerName, err := h.router.Chat(c.Request.Context(), modelName, req)
+	if err != nil {
+		var notFound *gateway.ErrModelNotFound
+		if errors.As(err, &notFound) {
+			// 未知模型不计指标：model 来自用户输入，防 Prometheus label 基数爆炸
+			writeAPIError(c, http.StatusBadRequest, err.Error(), "invalid_request_error", "model_not_found")
+			return
+		}
+	}
+	if providerName == "" {
+		providerName = "unknown"
+	}
+
 	result := "ok"
 	defer func() {
 		metrics.RequestsTotal.WithLabelValues(providerName, modelName, "false", result).Inc()
@@ -121,9 +120,8 @@ func (h *Handler) handleBlocking(
 			Observe(time.Since(startedAt).Seconds())
 	}()
 
-	res, err := p.Chat(c.Request.Context(), req)
 	if err != nil {
-		result = h.writeUpstreamError(c, err)
+		result = h.writeCallError(c, err)
 		return
 	}
 
@@ -135,16 +133,26 @@ func (h *Handler) handleBlocking(
 }
 
 // handleStream 处理流式请求：边解析边透传原始 chunk，旁路采集 TTFT 与 usage。
+// fallback 仅发生在流建立之前；流建立后中途失败按 interrupted 处理（one-api Q15）。
 func (h *Handler) handleStream(
 	c *gin.Context,
-	p provider.Provider,
 	req *provider.ChatRequest,
-	providerName, modelName string,
+	modelName string,
 	startedAt time.Time,
 ) {
-	stream, err := p.ChatStream(c.Request.Context(), req)
+	stream, providerName, err := h.router.ChatStream(c.Request.Context(), modelName, req)
 	if err != nil {
-		metrics.RequestsTotal.WithLabelValues(providerName, modelName, "true", h.writeUpstreamError(c, err)).Inc()
+		var notFound *gateway.ErrModelNotFound
+		if errors.As(err, &notFound) {
+			writeAPIError(c, http.StatusBadRequest, err.Error(), "invalid_request_error", "model_not_found")
+			return
+		}
+	}
+	if providerName == "" {
+		providerName = "unknown"
+	}
+	if err != nil {
+		metrics.RequestsTotal.WithLabelValues(providerName, modelName, "true", h.writeCallError(c, err)).Inc()
 		metrics.RequestDuration.WithLabelValues(providerName, modelName, "true").
 			Observe(time.Since(startedAt).Seconds())
 		return
@@ -217,8 +225,13 @@ func (h *Handler) handleStream(
 	}
 }
 
-// writeUpstreamError 把上游/传输错误归一化为 OpenAI 风格响应，返回指标 result 标签。
-func (h *Handler) writeUpstreamError(c *gin.Context, err error) string {
+// writeCallError 把上游/传输错误归一化为 OpenAI 风格响应，返回指标 result 标签。
+func (h *Handler) writeCallError(c *gin.Context, err error) string {
+	var allDown *gateway.ErrAllUpstreamDown
+	if errors.As(err, &allDown) {
+		writeAPIError(c, http.StatusServiceUnavailable, err.Error(), "upstream_error", "all_upstreams_unavailable")
+		return "upstream_error"
+	}
 	var upstreamErr *provider.UpstreamError
 	if errors.As(err, &upstreamErr) {
 		// 上游有响应体就原样透传（多为 OpenAI 风格错误 JSON），否则包装一层

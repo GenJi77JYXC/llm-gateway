@@ -2,6 +2,7 @@
 package metrics
 
 import (
+	"github.com/GenJi77JYXC/llm-gateway/internal/breaker"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -54,6 +55,20 @@ var (
 		Name:      "stream_interrupt_total",
 		Help:      "Upstream SSE streams ended with an error before [DONE].",
 	}, []string{"provider", "model"})
+
+	// FallbackTotal 首字节前失败触发的上游切换次数。failed_provider 为被切走的上游。
+	FallbackTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "fallback_total",
+		Help:      "Upstream switches caused by pre-first-byte failures.",
+	}, []string{"model", "failed_provider"})
+
+	// BreakerState 各上游熔断器状态：0=closed 1=open 2=half_open。
+	BreakerState = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Name:      "breaker_state",
+		Help:      "Circuit breaker state per upstream (0=closed, 1=open, 2=half_open).",
+	}, []string{"provider"})
 )
 
 // StreamLabel 将 bool 转为指标 label，避免调用处散落字符串。
@@ -62,4 +77,9 @@ func StreamLabel(stream bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// SetBreakerState 更新熔断器状态仪表（在 Allow/OnSuccess/OnFailure 之后调用）。
+func SetBreakerState(provider string, s breaker.State) {
+	BreakerState.WithLabelValues(provider).Set(float64(s))
 }

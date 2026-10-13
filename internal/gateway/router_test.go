@@ -10,71 +10,61 @@ import (
 )
 
 // fakeProvider 实现 provider.Provider，仅用于路由测试（不会真的发请求）。
+// chatFn/streamFn 可编程每次调用的行为，nil 时返回默认成功。
 type fakeProvider struct {
-	name   string
-	models []string
+	name    string
+	models  []string
+	chatFn  func() (*provider.Result, error)
+	chatN   int // Chat 调用次数（测试均为单线程）
+	streamN int // ChatStream 调用次数
 }
 
 func (f *fakeProvider) Name() string     { return f.name }
 func (f *fakeProvider) Models() []string { return f.models }
 
 func (f *fakeProvider) Chat(context.Context, *provider.ChatRequest) (*provider.Result, error) {
-	return nil, fmt.Errorf("fakeProvider: Chat not implemented")
+	f.chatN++
+	if f.chatFn != nil {
+		return f.chatFn()
+	}
+	return &provider.Result{StatusCode: 200}, nil
 }
 
 func (f *fakeProvider) ChatStream(context.Context, *provider.ChatRequest) (provider.Stream, error) {
+	f.streamN++
 	return nil, fmt.Errorf("fakeProvider: ChatStream not implemented")
 }
 
-// 同一 model 配在两个上游（3:1）时，Pick 按平滑加权轮询分发
-func TestPickDistributesByWeight(t *testing.T) {
-	a := &fakeProvider{name: "a", models: []string{"m"}}
-	b := &fakeProvider{name: "b", models: []string{"m"}}
-	r := NewRouter([]Upstream{
-		{Provider: a, Weight: 3},
-		{Provider: b, Weight: 1},
-	})
-
-	want := []string{"a", "a", "b", "a"} // 平滑序列 AABA
-	for i, name := range want {
-		p, err := r.Pick("m")
-		if err != nil {
-			t.Fatalf("pick %d: unexpected error: %v", i, err)
-		}
-		if p.Name() != name {
-			t.Fatalf("pick %d = %q, want %q", i, p.Name(), name)
-		}
-	}
-}
-
-// 权重缺省（0）按 1 处理，两个上游等权轮询
-func TestPickDefaultWeight(t *testing.T) {
-	a := &fakeProvider{name: "a", models: []string{"m"}}
-	b := &fakeProvider{name: "b", models: []string{"m"}}
-	r := NewRouter([]Upstream{{Provider: a}, {Provider: b}})
-
-	for i, name := range []string{"a", "b", "a", "b"} {
-		p, err := r.Pick("m")
-		if err != nil {
-			t.Fatalf("pick %d: unexpected error: %v", i, err)
-		}
-		if p.Name() != name {
-			t.Fatalf("pick %d = %q, want %q", i, p.Name(), name)
-		}
-	}
-}
-
-func TestPickModelNotFound(t *testing.T) {
+func TestChatModelNotFound(t *testing.T) {
 	r := NewRouter([]Upstream{
 		{Provider: &fakeProvider{name: "a", models: []string{"m"}}, Weight: 1},
 	})
-	_, err := r.Pick("nonexistent")
+	_, _, err := r.Chat(context.Background(), "nonexistent", &provider.ChatRequest{})
 	var notFound *ErrModelNotFound
 	if !errors.As(err, &notFound) {
 		t.Fatalf("err = %v, want ErrModelNotFound", err)
 	}
 	if notFound.Model != "nonexistent" {
 		t.Fatalf("notFound.Model = %q, want %q", notFound.Model, "nonexistent")
+	}
+}
+
+// 单候选模型：Chat 始终命中该上游
+func TestChatSingleUpstream(t *testing.T) {
+	a := &fakeProvider{name: "a", models: []string{"m"}}
+	r := NewRouter([]Upstream{{Provider: a, Weight: 1}})
+
+	for i := 0; i < 3; i++ {
+		_, name, err := r.Chat(context.Background(), "m", &provider.ChatRequest{})
+		if err != nil {
+			t.Fatalf("chat %d: unexpected error: %v", i, err)
+		}
+		if name != "a" {
+			t.Fatalf("chat %d provider = %q, want a", i, name)
+		}
+	}
+	if a.chatN != 3 {
+		t.Fatalf("a.chatN = %d, want 3", a.chatN)
 	}
 }
 

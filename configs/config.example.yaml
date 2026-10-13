@@ -28,6 +28,8 @@ providers:
     #     api_key: "${SILICONFLOW_API_KEY}"
     #     models: ["deepseek-chat"]
     #     weight: 1
+    # 内置被动熔断（暂未开放配置）：同一上游连续失败 3 次熔断 30s，之后半开
+    # 单探测试探恢复；首字节前失败（5xx/连接错误）自动 fallback 到其他候选。
     weight: 3
 
   # OpenAI：没有 key 可整段删除
