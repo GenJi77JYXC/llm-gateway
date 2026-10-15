@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/GenJi77JYXC/llm-gateway/internal/breaker"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -53,6 +54,9 @@ type Semantic struct {
 	embedder  Embedder
 	ttl       time.Duration
 	threshold float64
+	// embed 熔断：embedding 服务故障时连续失败跳闸，熔断期 Lookup 直接 miss
+	// （自动退化为仅精确缓存），冷却后半开试探恢复；与 provider 熔断同参数
+	br *breaker.Breaker
 }
 
 // NewSemantic 创建语义缓存：Ping 探测 + 建立向量索引（已存在则复用）。
@@ -121,6 +125,7 @@ func NewSemantic(opts SemanticOptions) (*Semantic, error) {
 		embedder:  opts.Embedder,
 		ttl:       opts.TTL,
 		threshold: opts.Threshold,
+		br:        breaker.New(3, 30*time.Second),
 	}, nil
 }
 
@@ -154,12 +159,18 @@ func probeVectorDim(ctx context.Context, client *redis.Client, dims int) error {
 // 返回 (命中响应, query 向量, error)：
 //   - 命中：(response, vec, nil)
 //   - 未命中：(nil, vec, nil)——vec 非 nil 供 Store 复用，避免回源后二次 embed
+//   - embed 熔断打开：(nil, nil, nil)——静默降级为仅精确缓存，不调 embedding
 //   - 故障：(nil, nil, err)——调用方按 miss 降级继续走真实上游
 func (s *Semantic) Lookup(ctx context.Context, model, text string) ([]byte, []float32, error) {
+	if !s.br.Allow() {
+		return nil, nil, nil // 熔断打开：跳过 embed 与检索，直接 miss
+	}
 	vec, err := s.embedder.Embed(ctx, text)
 	if err != nil {
+		s.br.OnFailure()
 		return nil, nil, fmt.Errorf("embedding 调用失败: %w", err)
 	}
+	s.br.OnSuccess()
 
 	// TAG 过滤锁定同 chat model + KNN 1 最近邻；dist 为余弦距离 = 1 - 相似度
 	query := fmt.Sprintf("(@model:{%s})=>[KNN 1 @vector $BLOB AS dist]", escapeTag(model))

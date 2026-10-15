@@ -14,6 +14,7 @@
 - 首字节前失败自动 fallback 到下一候选上游，客户端无感知
 - 按 Key + 按 model 双维度令牌桶限流，429 返回 OpenAI 风格错误
 - 两级响应缓存（仅非流式）：精确缓存（SHA256 完全相同 prompt）→ 语义缓存（Redis Stack 向量检索，同义改写命中，默认阈值 0.95）；命中不调上游、不计 token
+- 缓存两级降级：embedding 故障连续 3 次自动熔断（30s 冷却半开恢复），退化为仅精确缓存；Redis 故障整体直连上游——主链路永不因缓存/计量组件崩溃
 - SSE 旁路采集：**TTFT（首 token 延迟）**、token usage（自动注入 `stream_options.include_usage`）
 - Prometheus 指标：QPS、延迟分位、TTFT、token 用量、fallback/熔断/限流计数
 - 客户端断开立即取消上游请求（`context.Context` 贯穿全链路）

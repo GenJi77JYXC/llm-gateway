@@ -220,6 +220,44 @@ func TestSemanticDimensionSelfHeal(t *testing.T) {
 	}
 }
 
+// failEmbedder 固定返回错误，模拟 embedding 服务故障。
+type failEmbedder struct{ calls int }
+
+func (f *failEmbedder) Embed(context.Context, string) ([]float32, error) {
+	f.calls++
+	return nil, fmt.Errorf("embedding 服务不可用")
+}
+
+// TestSemanticEmbedCircuitOpen 验证 embedding 故障的两级降级：
+// 连续失败跳闸后 Lookup 直接 miss 且不再调 embed（自动退化为仅精确缓存）。
+func TestSemanticEmbedCircuitOpen(t *testing.T) {
+	fe := &failEmbedder{}
+	s := newTestSemantic(t, fe)
+	ctx := context.Background()
+
+	// 连续 3 次 embed 失败，达到熔断阈值（每次返回错误，调用方按 miss 降级）
+	for i := 0; i < 3; i++ {
+		if _, _, err := s.Lookup(ctx, "m", "任何问题"); err == nil {
+			t.Fatalf("第 %d 次 embed 失败应返回错误", i+1)
+		}
+	}
+	if fe.calls != 3 {
+		t.Fatalf("跳闸前应调 embed 3 次，实际 %d", fe.calls)
+	}
+
+	// 熔断打开：Lookup 直接 miss，不再调 embed，返回 (nil,nil,nil)
+	hit, vec, err := s.Lookup(ctx, "m", "任何问题")
+	if err != nil {
+		t.Errorf("熔断打开应静默 miss 而非报错: %v", err)
+	}
+	if hit != nil || vec != nil {
+		t.Errorf("熔断打开应返回 (nil,nil,nil)，实际 hit=%v vec=%v", hit, vec)
+	}
+	if fe.calls != 3 {
+		t.Errorf("熔断打开后不应再调 embed，实际调用 %d 次", fe.calls)
+	}
+}
+
 // TestSemanticIntegration 真实 embedding + redis-stack 端到端（需 EMBEDDING_API_KEY）。
 // 同义改写（实测余弦 0.996）应命中阈值 0.95 的语义缓存。
 func TestSemanticIntegration(t *testing.T) {
