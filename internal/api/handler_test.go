@@ -79,7 +79,7 @@ func setup(t *testing.T, rec *collectRecorder) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	r := gateway.NewRouter([]gateway.Upstream{{Provider: &fakeProvider{}, Weight: 1}})
-	NewHandler(r, rec, nil).RegisterRoutes(engine,
+	NewHandler(r, rec, nil, nil).RegisterRoutes(engine,
 		[]config.ClientKey{{Name: "dev", Key: "sk-test"}}, nil)
 	return engine
 }
@@ -101,7 +101,7 @@ func setupWithCache(t *testing.T, p *countingProvider, exact *cache.Exact) *gin.
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	r := gateway.NewRouter([]gateway.Upstream{{Provider: p, Weight: 1}})
-	NewHandler(r, nil, exact).RegisterRoutes(engine,
+	NewHandler(r, nil, exact, nil).RegisterRoutes(engine,
 		[]config.ClientKey{{Name: "dev", Key: "sk-test"}}, nil)
 	return engine
 }

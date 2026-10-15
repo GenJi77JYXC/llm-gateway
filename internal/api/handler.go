@@ -30,11 +30,23 @@ type Handler struct {
 	router   *gateway.Router
 	recorder usage.Recorder
 	exact    *cache.Exact
+	semantic *cache.Semantic
 }
 
-// NewHandler 创建 HTTP Handler。recorder 为计量器、exact 为精确缓存，均可为 nil（跳过对应功能）。
-func NewHandler(r *gateway.Router, recorder usage.Recorder, exact *cache.Exact) *Handler {
-	return &Handler{router: r, recorder: recorder, exact: exact}
+// NewHandler 创建 HTTP Handler。recorder / exact / semantic 均可为 nil（跳过对应功能）。
+func NewHandler(r *gateway.Router, recorder usage.Recorder, exact *cache.Exact, semantic *cache.Semantic) *Handler {
+	return &Handler{router: r, recorder: recorder, exact: exact, semantic: semantic}
+}
+
+// writeCachedResponse 输出缓存命中响应：命中类型计入 cache_hit_total，
+// provider="cache" + result="cache_hit" 独立计数（与真实上游区分），并标记 X-Cache 头。
+func (h *Handler) writeCachedResponse(c *gin.Context, modelName, hitType, xCache string, body []byte, startedAt time.Time) {
+	metrics.CacheHitTotal.WithLabelValues(hitType).Inc()
+	metrics.RequestsTotal.WithLabelValues("cache", modelName, "false", "cache_hit").Inc()
+	metrics.RequestDuration.WithLabelValues("cache", modelName, "false").
+		Observe(time.Since(startedAt).Seconds())
+	c.Header("X-Cache", xCache)
+	c.Data(http.StatusOK, "application/json; charset=utf-8", body)
 }
 
 // RegisterRoutes 在给定 gin 引擎上注册全部路由。
@@ -109,7 +121,8 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 }
 
 // handleBlocking 处理非流式请求：上游 body 原样透传。fallback 在 gateway 层完成。
-// 命中精确缓存时直接返回（provider="cache", result="cache_hit"），不调上游、不计 usage。
+// 两级缓存：精确（SHA256）→ 语义（向量 KNN）；命中直接返回（provider="cache"），
+// 不调上游、不计 usage。任一级查询失败均按 miss 降级，不影响主链路。
 func (h *Handler) handleBlocking(
 	c *gin.Context,
 	keyID string,
@@ -117,28 +130,45 @@ func (h *Handler) handleBlocking(
 	modelName string,
 	startedAt time.Time,
 ) {
-	// 精确缓存查询：命中即返回；查询失败按 miss 降级继续走上游
+	cacheable := false // 请求是否可缓存（决定 miss 是否计数）
 	cacheKey := ""
 	if h.exact != nil {
 		if k, kerr := cache.Key(req.Body); kerr == nil {
+			cacheable = true
 			cacheKey = k
 			hit, gerr := h.exact.Get(c.Request.Context(), k)
 			switch {
 			case gerr != nil:
 				log.Printf("[cache] 精确缓存查询失败，按 miss 降级: %v", gerr)
-				metrics.CacheHitTotal.WithLabelValues("miss").Inc()
 			case hit != nil:
-				metrics.CacheHitTotal.WithLabelValues("exact").Inc()
-				metrics.RequestsTotal.WithLabelValues("cache", modelName, "false", "cache_hit").Inc()
-				metrics.RequestDuration.WithLabelValues("cache", modelName, "false").
-					Observe(time.Since(startedAt).Seconds())
-				c.Header("X-Cache", "HIT")
-				c.Data(http.StatusOK, "application/json; charset=utf-8", hit)
+				h.writeCachedResponse(c, modelName, "exact", "HIT", hit, startedAt)
 				return
-			default:
-				metrics.CacheHitTotal.WithLabelValues("miss").Inc()
 			}
 		}
+	}
+
+	// 精确 miss → 语义缓存（需要 embedding 判定，vec 带出供回写复用）
+	semText := ""
+	var semVec []float32
+	if h.semantic != nil {
+		if semText = cache.MessagesText(req.Body); semText != "" {
+			cacheable = true
+			hit, vec, serr := h.semantic.Lookup(c.Request.Context(), modelName, semText)
+			switch {
+			case serr != nil:
+				log.Printf("[cache] 语义缓存查询失败，按 miss 降级: %v", serr)
+			case hit != nil:
+				h.writeCachedResponse(c, modelName, "semantic", "SEMANTIC", hit, startedAt)
+				return
+			default:
+				semVec = vec // miss 但向量已算好，回写时复用
+			}
+		}
+	}
+
+	// 两级均未命中：计一次 miss（不可缓存请求不计）
+	if cacheable {
+		metrics.CacheHitTotal.WithLabelValues("miss").Inc()
 	}
 
 	res, providerName, err := h.router.Chat(c.Request.Context(), modelName, req)
@@ -168,11 +198,18 @@ func (h *Handler) handleBlocking(
 
 	h.recordUsage(keyID, providerName, modelName, res.Usage)
 
-	// 成功响应回写精确缓存；独立 ctx：客户端断开不影响回写，失败仅记日志
-	if cacheKey != "" && res.StatusCode == http.StatusOK {
+	// 成功响应回写两级缓存；独立 ctx：客户端断开不影响回写，失败仅记日志
+	if res.StatusCode == http.StatusOK && (cacheKey != "" || semVec != nil) {
 		wctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		if werr := h.exact.Set(wctx, cacheKey, res.Body); werr != nil {
-			log.Printf("[cache] 精确缓存写入失败: %v", werr)
+		if cacheKey != "" {
+			if werr := h.exact.Set(wctx, cacheKey, res.Body); werr != nil {
+				log.Printf("[cache] 精确缓存写入失败: %v", werr)
+			}
+		}
+		if semVec != nil {
+			if werr := h.semantic.Store(wctx, modelName, semText, semVec, res.Body); werr != nil {
+				log.Printf("[cache] 语义缓存写入失败: %v", werr)
+			}
 		}
 		cancel()
 	}

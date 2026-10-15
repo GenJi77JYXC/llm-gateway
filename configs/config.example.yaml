@@ -28,7 +28,9 @@ redis:
 
 # 响应缓存（可选，依赖 redis 段）
 cache:
-  exact_ttl: "1h"          # 精确缓存有效期（key = SHA256(model+messages)，仅非流式）；"0" = 禁用
+  exact_ttl: "1h"            # 精确缓存有效期（key = SHA256(model+messages)，仅非流式）；"0" = 禁用
+  # semantic_ttl: "1h"       # 语义缓存有效期，缺省 = exact_ttl；依赖下方 embedding 段 + redis-stack
+  # semantic_threshold: 0.95 # 语义命中所需余弦相似度（0~1），缺省 0.95；越高越保守
 
 # embedding（可选，语义缓存依赖；整段省略 = 只精确缓存）
 # 任何 OpenAI 兼容 embedding API 均可，示例为硅基流动免费的 bge-m3

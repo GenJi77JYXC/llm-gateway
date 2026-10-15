@@ -68,6 +68,10 @@ type RedisConfig struct {
 type CacheConfig struct {
 	// ExactTTL 精确缓存有效期（如 "1h"、"30m"）；缺省 1h；显式 "0" = 禁用精确缓存
 	ExactTTL string `yaml:"exact_ttl"`
+	// SemanticTTL 语义缓存有效期；缺省与 exact_ttl 一致；显式 "0" = 禁用语义缓存
+	SemanticTTL string `yaml:"semantic_ttl"`
+	// SemanticThreshold 语义命中余弦相似度阈值，缺省 0.95（0,1] 区间
+	SemanticThreshold float64 `yaml:"semantic_threshold"`
 }
 
 // EmbeddingConfig 是 embedding API 配置（可选，语义缓存依赖，整段省略 = 不用语义缓存）。
@@ -147,6 +151,14 @@ func (c *Config) validate() error {
 		if _, err := time.ParseDuration(c.Cache.ExactTTL); err != nil {
 			return fmt.Errorf("cache.exact_ttl 无法解析: %w", err)
 		}
+	}
+	if c.Cache.SemanticTTL != "" {
+		if _, err := time.ParseDuration(c.Cache.SemanticTTL); err != nil {
+			return fmt.Errorf("cache.semantic_ttl 无法解析: %w", err)
+		}
+	}
+	if c.Cache.SemanticThreshold < 0 || c.Cache.SemanticThreshold > 1 {
+		return fmt.Errorf("cache.semantic_threshold 须在 [0,1] 区间（0=取缺省 0.95）")
 	}
 
 	// embedding 段：配置了就必须四项齐全（整段省略则完全跳过语义缓存）

@@ -17,6 +17,7 @@ import (
 	"github.com/GenJi77JYXC/llm-gateway/internal/api/middleware"
 	"github.com/GenJi77JYXC/llm-gateway/internal/cache"
 	"github.com/GenJi77JYXC/llm-gateway/internal/config"
+	"github.com/GenJi77JYXC/llm-gateway/internal/embedding"
 	"github.com/GenJi77JYXC/llm-gateway/internal/gateway"
 	"github.com/GenJi77JYXC/llm-gateway/internal/metrics"
 	"github.com/GenJi77JYXC/llm-gateway/internal/provider/openai"
@@ -52,6 +53,7 @@ func main() {
 	// 计量器（软依赖）：配置了 redis 用 Redis 聚合，连不上/未配置退化为内存聚合
 	var recorder usage.Recorder = usage.NewMem()
 	var exact *cache.Exact
+	var semantic *cache.Semantic
 	if cfg.Redis.Addr != "" {
 		rr, err := usage.NewRedisRecorder(usage.RedisOptions{
 			Addr:     cfg.Redis.Addr,
@@ -91,9 +93,43 @@ func main() {
 				defer func() { _ = ec.Close() }()
 			}
 		}
+
+		// 语义缓存（软依赖）：需 redis + embedding 双双就位；任一缺失/故障降级为仅精确缓存
+		if exact != nil && cfg.Embedding.BaseURL != "" {
+			semTTL := exactTTL
+			if cfg.Cache.SemanticTTL != "" {
+				semTTL, _ = time.ParseDuration(cfg.Cache.SemanticTTL)
+			}
+			threshold := cfg.Cache.SemanticThreshold
+			if threshold == 0 {
+				threshold = 0.95
+			}
+			if semTTL > 0 {
+				sem, err := cache.NewSemantic(cache.SemanticOptions{
+					Addr:       cfg.Redis.Addr,
+					Password:   cfg.Redis.Password,
+					DB:         cfg.Redis.DB,
+					TTL:        semTTL,
+					Threshold:  threshold,
+					Dimensions: cfg.Embedding.Dimensions,
+					Embedder: embedding.New(embedding.Options{
+						BaseURL:    cfg.Embedding.BaseURL,
+						APIKey:     cfg.Embedding.APIKey,
+						Model:      cfg.Embedding.Model,
+						Dimensions: cfg.Embedding.Dimensions,
+					}),
+				})
+				if err != nil {
+					log.Printf("语义缓存初始化失败，降级仅精确缓存: %v", err)
+				} else {
+					semantic = sem
+					defer func() { _ = sem.Close() }()
+				}
+			}
+		}
 	}
 
-	server := api.NewHTTPServer(cfg.Server.Addr, cfg.Auth.ClientKeys, r, limiter, recorder, exact)
+	server := api.NewHTTPServer(cfg.Server.Addr, cfg.Auth.ClientKeys, r, limiter, recorder, exact, semantic)
 
 	// 优雅停机：收到 SIGINT/SIGTERM 后停止接收新连接，等待在途请求完成（最多 15s）
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

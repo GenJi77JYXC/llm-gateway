@@ -2,7 +2,7 @@
 
 一个用 Go 实现的 LLM 推理网关：统一 OpenAI 兼容协议接入多家大模型，提供流式透传、加权负载均衡、熔断降级、限流、可观测性。
 
-> 当前进度：**Week 2（路由与可靠性）**，后续规划：计量计费/语义缓存 → K8s 部署。
+> 当前进度：**Week 3（成本管控与缓存）**：计量聚合 / 成本看板 / 两级缓存已完成，后续 Week 4 K8s 部署。
 
 ## 功能
 
@@ -13,6 +13,7 @@
 - 三态熔断器（闭合/打开/半开）：连输 3 次熔断 30s，半开单探测试探恢复
 - 首字节前失败自动 fallback 到下一候选上游，客户端无感知
 - 按 Key + 按 model 双维度令牌桶限流，429 返回 OpenAI 风格错误
+- 两级响应缓存（仅非流式）：精确缓存（SHA256 完全相同 prompt）→ 语义缓存（Redis Stack 向量检索，同义改写命中，默认阈值 0.95）；命中不调上游、不计 token
 - SSE 旁路采集：**TTFT（首 token 延迟）**、token usage（自动注入 `stream_options.include_usage`）
 - Prometheus 指标：QPS、延迟分位、TTFT、token 用量、fallback/熔断/限流计数
 - 客户端断开立即取消上游请求（`context.Context` 贯穿全链路）
@@ -32,6 +33,9 @@ internal/provider    Provider 抽象（只依赖 context.Context + 领域类型�
 internal/model       领域类型（Usage / 错误体 / 模型列表）
 internal/config      YAML + 环境变量配置
 internal/metrics     Prometheus 指标定义
+internal/usage       token 计量（内存聚合 / Redis 异步批量聚合，按 key+model+日期）
+internal/cache       两级缓存：Exact（SHA256 精确）+ Semantic（Redis Stack 向量检索）
+internal/embedding   OpenAI 兼容 embedding 客户端（语义缓存向量化）
 scripts/mockupstream 本地联调用假上游（支持延迟/错误率故障注入）
 scripts/benchmark    压测负载发生器（客户端侧测延迟分位、TTFT、吞吐）
 ```
