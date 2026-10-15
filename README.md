@@ -131,7 +131,7 @@ rate_limit:
 
 | 指标 | 类型 | 说明 |
 |---|---|---|
-| `llmgateway_requests_total{provider,model,stream,result}` | Counter | 请求计数（result: ok/upstream_error/bad_request/internal_error） |
+| `llmgateway_requests_total{provider,model,stream,result}` | Counter | 请求计数（result: ok/upstream_error/bad_request/internal_error/cache_hit；缓存命中时 provider=cache） |
 | `llmgateway_request_duration_seconds` | Histogram | 端到端耗时 |
 | `llmgateway_ttft_seconds{provider,model}` | Histogram | 流式首 token 延迟 |
 | `llmgateway_tokens_total{provider,model,kind}` | Counter | prompt/completion/total token |

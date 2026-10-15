@@ -158,6 +158,14 @@ func (h *Handler) handleBlocking(
 			case serr != nil:
 				log.Printf("[cache] 语义缓存查询失败，按 miss 降级: %v", serr)
 			case hit != nil:
+				// 顺手回写精确缓存：本次完全相同 prompt 再来时直接精确命中，省一次 embed
+				if cacheKey != "" {
+					wctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					if werr := h.exact.Set(wctx, cacheKey, hit); werr != nil {
+						log.Printf("[cache] 语义命中回写精确缓存失败: %v", werr)
+					}
+					cancel()
+				}
 				h.writeCachedResponse(c, modelName, "semantic", "SEMANTIC", hit, startedAt)
 				return
 			default:
