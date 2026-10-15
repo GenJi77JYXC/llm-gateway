@@ -138,6 +138,7 @@ rate_limit:
 | `llmgateway_rate_limited_total{dimension}` | Counter | 被限流拒绝的请求数（dimension=key/model） |
 | `llmgateway_usage_dropped_total` | Counter | 计量事件丢失数（聚合 channel 满或 Redis 写失败） |
 | `llmgateway_usage_daily_tokens{key_id,model,kind,date}` | Gauge | 按日聚合 token 用量（scrape 时从 Redis 现查，供成本看板） |
+| `llmgateway_cache_hit_total{type}` | Counter | 缓存命中计数（type=exact/semantic/miss） |
 
 ## 设计要点（对照 one-api 的改进）
 

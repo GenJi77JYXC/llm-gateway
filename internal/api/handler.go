@@ -4,9 +4,11 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/GenJi77JYXC/llm-gateway/internal/api/middleware"
+	"github.com/GenJi77JYXC/llm-gateway/internal/cache"
 	"github.com/GenJi77JYXC/llm-gateway/internal/config"
 	"github.com/GenJi77JYXC/llm-gateway/internal/gateway"
 	"github.com/GenJi77JYXC/llm-gateway/internal/metrics"
@@ -26,11 +29,12 @@ import (
 type Handler struct {
 	router   *gateway.Router
 	recorder usage.Recorder
+	exact    *cache.Exact
 }
 
-// NewHandler 创建 HTTP Handler。recorder 为计量器，可为 nil（跳过计量）。
-func NewHandler(r *gateway.Router, recorder usage.Recorder) *Handler {
-	return &Handler{router: r, recorder: recorder}
+// NewHandler 创建 HTTP Handler。recorder 为计量器、exact 为精确缓存，均可为 nil（跳过对应功能）。
+func NewHandler(r *gateway.Router, recorder usage.Recorder, exact *cache.Exact) *Handler {
+	return &Handler{router: r, recorder: recorder, exact: exact}
 }
 
 // RegisterRoutes 在给定 gin 引擎上注册全部路由。
@@ -105,6 +109,7 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 }
 
 // handleBlocking 处理非流式请求：上游 body 原样透传。fallback 在 gateway 层完成。
+// 命中精确缓存时直接返回（provider="cache", result="cache_hit"），不调上游、不计 usage。
 func (h *Handler) handleBlocking(
 	c *gin.Context,
 	keyID string,
@@ -112,6 +117,30 @@ func (h *Handler) handleBlocking(
 	modelName string,
 	startedAt time.Time,
 ) {
+	// 精确缓存查询：命中即返回；查询失败按 miss 降级继续走上游
+	cacheKey := ""
+	if h.exact != nil {
+		if k, kerr := cache.Key(req.Body); kerr == nil {
+			cacheKey = k
+			hit, gerr := h.exact.Get(c.Request.Context(), k)
+			switch {
+			case gerr != nil:
+				log.Printf("[cache] 精确缓存查询失败，按 miss 降级: %v", gerr)
+				metrics.CacheHitTotal.WithLabelValues("miss").Inc()
+			case hit != nil:
+				metrics.CacheHitTotal.WithLabelValues("exact").Inc()
+				metrics.RequestsTotal.WithLabelValues("cache", modelName, "false", "cache_hit").Inc()
+				metrics.RequestDuration.WithLabelValues("cache", modelName, "false").
+					Observe(time.Since(startedAt).Seconds())
+				c.Header("X-Cache", "HIT")
+				c.Data(http.StatusOK, "application/json; charset=utf-8", hit)
+				return
+			default:
+				metrics.CacheHitTotal.WithLabelValues("miss").Inc()
+			}
+		}
+	}
+
 	res, providerName, err := h.router.Chat(c.Request.Context(), modelName, req)
 	if err != nil {
 		var notFound *gateway.ErrModelNotFound
@@ -138,6 +167,16 @@ func (h *Handler) handleBlocking(
 	}
 
 	h.recordUsage(keyID, providerName, modelName, res.Usage)
+
+	// 成功响应回写精确缓存；独立 ctx：客户端断开不影响回写，失败仅记日志
+	if cacheKey != "" && res.StatusCode == http.StatusOK {
+		wctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if werr := h.exact.Set(wctx, cacheKey, res.Body); werr != nil {
+			log.Printf("[cache] 精确缓存写入失败: %v", werr)
+		}
+		cancel()
+	}
+
 	if ct := res.Header.Get("Content-Type"); ct != "" {
 		c.Header("Content-Type", ct)
 	}

@@ -26,6 +26,10 @@ redis:
   # password: ""
   # db: 0
 
+# 响应缓存（可选，依赖 redis 段）
+cache:
+  exact_ttl: "1h"          # 精确缓存有效期（key = SHA256(model+messages)，仅非流式）；"0" = 禁用
+
 providers:
   # DeepSeek：OpenAI 兼容协议，便宜，适合开发联调
   - name: deepseek

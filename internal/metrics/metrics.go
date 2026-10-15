@@ -83,7 +83,21 @@ var (
 		Name:      "usage_dropped_total",
 		Help:      "Usage events dropped (aggregation channel full or Redis write failed).",
 	})
+
+	// CacheHitTotal 缓存命中计数。type: exact / semantic / miss（miss = 可缓存但未命中）。
+	CacheHitTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "cache_hit_total",
+		Help:      "Cache hit count by type (exact / semantic / miss).",
+	}, []string{"type"})
 )
+
+func init() {
+	// 预热 label 组合，使看板在无数据时显示 0 而非 No data
+	CacheHitTotal.WithLabelValues("exact")
+	CacheHitTotal.WithLabelValues("semantic")
+	CacheHitTotal.WithLabelValues("miss")
+}
 
 // StreamLabel 将 bool 转为指标 label，避免调用处散落字符串。
 func StreamLabel(stream bool) string {

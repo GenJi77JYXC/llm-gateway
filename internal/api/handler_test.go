@@ -7,9 +7,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 
+	"github.com/GenJi77JYXC/llm-gateway/internal/cache"
 	"github.com/GenJi77JYXC/llm-gateway/internal/config"
 	"github.com/GenJi77JYXC/llm-gateway/internal/gateway"
 	"github.com/GenJi77JYXC/llm-gateway/internal/model"
@@ -76,7 +79,29 @@ func setup(t *testing.T, rec *collectRecorder) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	r := gateway.NewRouter([]gateway.Upstream{{Provider: &fakeProvider{}, Weight: 1}})
-	NewHandler(r, rec).RegisterRoutes(engine,
+	NewHandler(r, rec, nil).RegisterRoutes(engine,
+		[]config.ClientKey{{Name: "dev", Key: "sk-test"}}, nil)
+	return engine
+}
+
+// countingProvider 记录 Chat 调用次数的假上游（验证缓存命中时不调上游）。
+type countingProvider struct {
+	fakeProvider
+	calls int
+}
+
+func (p *countingProvider) Chat(ctx context.Context, req *provider.ChatRequest) (*provider.Result, error) {
+	p.calls++
+	return p.fakeProvider.Chat(ctx, req)
+}
+
+// setupWithCache 组装带精确缓存的测试引擎。
+func setupWithCache(t *testing.T, p *countingProvider, exact *cache.Exact) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	r := gateway.NewRouter([]gateway.Upstream{{Provider: p, Weight: 1}})
+	NewHandler(r, nil, exact).RegisterRoutes(engine,
 		[]config.ClientKey{{Name: "dev", Key: "sk-test"}}, nil)
 	return engine
 }
@@ -142,5 +167,68 @@ func TestChatCompletionsBadKeyNotRecorded(t *testing.T) {
 	}
 	if len(rec.evts) != 0 {
 		t.Errorf("鉴权失败不应产生计量事件，实际 %d 条", len(rec.evts))
+	}
+}
+
+// newTestExactCache 起 miniredis 并创建精确缓存实例。
+func newTestExactCache(t *testing.T) *cache.Exact {
+	t.Helper()
+	mr := miniredis.RunT(t)
+	ec, err := cache.NewExact(cache.ExactOptions{Addr: mr.Addr(), TTL: time.Hour})
+	if err != nil {
+		t.Fatalf("创建精确缓存失败: %v", err)
+	}
+	t.Cleanup(func() { _ = ec.Close() })
+	return ec
+}
+
+func TestExactCacheHitSkipsUpstream(t *testing.T) {
+	p := &countingProvider{}
+	engine := setupWithCache(t, p, newTestExactCache(t))
+
+	body := `{"model":"test-model","messages":[{"role":"user","content":"你好"}]}`
+	resp1 := postChat(engine, body)
+	if resp1.Code != http.StatusOK {
+		t.Fatalf("首次请求期望 200，实际 %d", resp1.Code)
+	}
+	if resp1.Header().Get("X-Cache") != "" {
+		t.Errorf("首次请求不应命中缓存，X-Cache=%q", resp1.Header().Get("X-Cache"))
+	}
+
+	resp2 := postChat(engine, body)
+	if resp2.Code != http.StatusOK {
+		t.Fatalf("二次请求期望 200，实际 %d", resp2.Code)
+	}
+	if resp2.Header().Get("X-Cache") != "HIT" {
+		t.Errorf("二次请求应命中缓存，X-Cache=%q", resp2.Header().Get("X-Cache"))
+	}
+	if resp2.Body.String() != resp1.Body.String() {
+		t.Errorf("缓存响应应与首次一致\n首次 %s\n二次 %s", resp1.Body.String(), resp2.Body.String())
+	}
+	if p.calls != 1 {
+		t.Errorf("缓存命中不应调上游：期望 1 次，实际 %d 次", p.calls)
+	}
+}
+
+func TestExactCacheDifferentPromptMisses(t *testing.T) {
+	p := &countingProvider{}
+	engine := setupWithCache(t, p, newTestExactCache(t))
+
+	postChat(engine, `{"model":"test-model","messages":[{"role":"user","content":"你好"}]}`)
+	postChat(engine, `{"model":"test-model","messages":[{"role":"user","content":"再见"}]}`)
+	if p.calls != 2 {
+		t.Errorf("不同 prompt 应各自回源：期望 2 次，实际 %d 次", p.calls)
+	}
+}
+
+func TestExactCacheStreamBypasses(t *testing.T) {
+	p := &countingProvider{}
+	engine := setupWithCache(t, p, newTestExactCache(t))
+
+	body := `{"model":"test-model","stream":true,"messages":[{"role":"user","content":"你好"}]}`
+	postChat(engine, body)
+	resp := postChat(engine, body)
+	if resp.Header().Get("X-Cache") == "HIT" {
+		t.Error("流式请求不应命中精确缓存")
 	}
 }

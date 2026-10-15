@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/GenJi77JYXC/llm-gateway/internal/api/middleware"
+	"github.com/GenJi77JYXC/llm-gateway/internal/cache"
 	"github.com/GenJi77JYXC/llm-gateway/internal/config"
 	"github.com/GenJi77JYXC/llm-gateway/internal/gateway"
 	"github.com/GenJi77JYXC/llm-gateway/internal/usage"
@@ -19,11 +20,11 @@ import (
 //   - ReadTimeout 30s：请求体通常很小，30s 足够；
 //   - WriteTimeout 300s：流式生成长，给到 5 分钟上限（更长的流需调大或改用独立 server）；
 //   - IdleTimeout 60s。
-func NewHTTPServer(addr string, clientKeys []config.ClientKey, r *gateway.Router, limiter *middleware.RateLimiter, recorder usage.Recorder) *http.Server {
+func NewHTTPServer(addr string, clientKeys []config.ClientKey, r *gateway.Router, limiter *middleware.RateLimiter, recorder usage.Recorder, exact *cache.Exact) *http.Server {
 	engine := gin.New()
 	engine.Use(gin.Logger(), gin.Recovery())
 
-	NewHandler(r, recorder).RegisterRoutes(engine, clientKeys, limiter)
+	NewHandler(r, recorder, exact).RegisterRoutes(engine, clientKeys, limiter)
 
 	return &http.Server{
 		Addr:              addr,

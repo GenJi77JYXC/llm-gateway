@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,6 +17,7 @@ type Config struct {
 	Auth      AuthConfig       `yaml:"auth"`
 	RateLimit RateLimitConfig  `yaml:"rate_limit"`
 	Redis     RedisConfig      `yaml:"redis"`
+	Cache     CacheConfig      `yaml:"cache"`
 	Providers []ProviderConfig `yaml:"providers"`
 }
 
@@ -59,6 +61,12 @@ type RedisConfig struct {
 	Addr     string `yaml:"addr"`
 	Password string `yaml:"password"`
 	DB       int    `yaml:"db"`
+}
+
+// CacheConfig 是响应缓存配置（可选，依赖 redis 段，redis 未配置时缓存整体不生效）。
+type CacheConfig struct {
+	// ExactTTL 精确缓存有效期（如 "1h"、"30m"）；缺省 1h；显式 "0" = 禁用精确缓存
+	ExactTTL string `yaml:"exact_ttl"`
 }
 
 // ProviderConfig 描述一个模型上游。
@@ -121,6 +129,13 @@ func (c *Config) validate() error {
 	}
 	if len(c.Providers) == 0 {
 		return fmt.Errorf("providers 至少配置一个上游")
+	}
+
+	// 缓存 TTL 合法性提前校验，避免运行期才发现配置写错
+	if c.Cache.ExactTTL != "" {
+		if _, err := time.ParseDuration(c.Cache.ExactTTL); err != nil {
+			return fmt.Errorf("cache.exact_ttl 无法解析: %w", err)
+		}
 	}
 
 	// 限流 burst 缺省补齐为对应 QPS（至少 1），保证限流器有可用突发容量

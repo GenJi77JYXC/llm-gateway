@@ -15,6 +15,7 @@ import (
 
 	"github.com/GenJi77JYXC/llm-gateway/internal/api"
 	"github.com/GenJi77JYXC/llm-gateway/internal/api/middleware"
+	"github.com/GenJi77JYXC/llm-gateway/internal/cache"
 	"github.com/GenJi77JYXC/llm-gateway/internal/config"
 	"github.com/GenJi77JYXC/llm-gateway/internal/gateway"
 	"github.com/GenJi77JYXC/llm-gateway/internal/metrics"
@@ -50,6 +51,7 @@ func main() {
 
 	// 计量器（软依赖）：配置了 redis 用 Redis 聚合，连不上/未配置退化为内存聚合
 	var recorder usage.Recorder = usage.NewMem()
+	var exact *cache.Exact
 	if cfg.Redis.Addr != "" {
 		rr, err := usage.NewRedisRecorder(usage.RedisOptions{
 			Addr:     cfg.Redis.Addr,
@@ -69,9 +71,29 @@ func main() {
 				}
 			}()
 		}
+
+		// 精确缓存（软依赖）：TTL 缺省 1h，"0" 显式禁用；连不上降级为无缓存直连上游
+		exactTTL := time.Hour
+		if cfg.Cache.ExactTTL != "" {
+			exactTTL, _ = time.ParseDuration(cfg.Cache.ExactTTL) // validate 已保证合法
+		}
+		if exactTTL > 0 {
+			ec, err := cache.NewExact(cache.ExactOptions{
+				Addr:     cfg.Redis.Addr,
+				Password: cfg.Redis.Password,
+				DB:       cfg.Redis.DB,
+				TTL:      exactTTL,
+			})
+			if err != nil {
+				log.Printf("精确缓存初始化失败，降级直连上游: %v", err)
+			} else {
+				exact = ec
+				defer func() { _ = ec.Close() }()
+			}
+		}
 	}
 
-	server := api.NewHTTPServer(cfg.Server.Addr, cfg.Auth.ClientKeys, r, limiter, recorder)
+	server := api.NewHTTPServer(cfg.Server.Addr, cfg.Auth.ClientKeys, r, limiter, recorder, exact)
 
 	// 优雅停机：收到 SIGINT/SIGTERM 后停止接收新连接，等待在途请求完成（最多 15s）
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
