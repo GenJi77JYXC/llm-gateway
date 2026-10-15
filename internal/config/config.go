@@ -24,11 +24,19 @@ type ServerConfig struct {
 	Addr string `yaml:"addr"`
 }
 
+// ClientKey 是一个允许访问网关的客户端凭证。
+type ClientKey struct {
+	// Name 客户端身份标识，token 计量按它归属（看板按 name 分组），如 dev、ci-bot
+	Name string `yaml:"name"`
+	// Key 调用方请求中 Authorization: Bearer <key> 的 <key>
+	Key string `yaml:"key"`
+}
+
 // AuthConfig 是客户端（调用方）鉴权配置。
 // Week 1 先用静态 key 列表，后续可替换为 DB 持久化。
 type AuthConfig struct {
-	// ClientKeys 允许访问网关的 key 列表（Authorization: Bearer <key>）
-	ClientKeys []string `yaml:"client_keys"`
+	// ClientKeys 允许访问网关的凭证列表
+	ClientKeys []ClientKey `yaml:"client_keys"`
 }
 
 // RateLimitConfig 是双维度令牌桶限流配置（可选）。
@@ -87,6 +95,20 @@ func (c *Config) validate() error {
 	}
 	if len(c.Auth.ClientKeys) == 0 {
 		return fmt.Errorf("auth.client_keys 至少配置一个")
+	}
+	seenKeys := make(map[string]struct{}, len(c.Auth.ClientKeys))
+	for i := range c.Auth.ClientKeys {
+		ck := &c.Auth.ClientKeys[i]
+		if ck.Name == "" {
+			return fmt.Errorf("auth.client_keys[%d].name 不能为空（token 计量按 name 归属）", i)
+		}
+		if ck.Key == "" {
+			return fmt.Errorf("auth.client_keys[%d].key 不能为空", i)
+		}
+		if _, ok := seenKeys[ck.Key]; ok {
+			return fmt.Errorf("auth.client_keys[%d].key 重复", i)
+		}
+		seenKeys[ck.Key] = struct{}{}
 	}
 	if len(c.Providers) == 0 {
 		return fmt.Errorf("providers 至少配置一个上游")

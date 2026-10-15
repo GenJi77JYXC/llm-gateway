@@ -18,6 +18,7 @@ import (
 	"github.com/GenJi77JYXC/llm-gateway/internal/config"
 	"github.com/GenJi77JYXC/llm-gateway/internal/gateway"
 	"github.com/GenJi77JYXC/llm-gateway/internal/provider/openai"
+	"github.com/GenJi77JYXC/llm-gateway/internal/usage"
 )
 
 func main() {
@@ -44,7 +45,9 @@ func main() {
 	r := gateway.NewRouter(upstreams)
 
 	limiter := middleware.NewRateLimiter(cfg.RateLimit)
-	server := api.NewHTTPServer(cfg.Server.Addr, cfg.Auth.ClientKeys, r, limiter)
+	// 计量器：w3-1 先用内存聚合（重启即丢），w3-2 换 Redis 聚合并保留内存版兜底
+	recorder := usage.NewMem()
+	server := api.NewHTTPServer(cfg.Server.Addr, cfg.Auth.ClientKeys, r, limiter, recorder)
 
 	// 优雅停机：收到 SIGINT/SIGTERM 后停止接收新连接，等待在途请求完成（最多 15s）
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

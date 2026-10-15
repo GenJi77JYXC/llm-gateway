@@ -8,16 +8,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/GenJi77JYXC/llm-gateway/internal/config"
 	"github.com/GenJi77JYXC/llm-gateway/internal/model"
 )
 
-// ClientAuth 校验 Authorization: Bearer <key>。
-// keys 为允许的客户端 key 列表（Week 1 静态配置，后续替换为 DB 持久化）。
-func ClientAuth(keys []string) gin.HandlerFunc {
-	allowed := make([][]byte, 0, len(keys))
-	for _, k := range keys {
-		allowed = append(allowed, []byte(k))
-	}
+// CtxKeyID 是鉴权通过后注入 gin context 的客户端标识 key，
+// 值为 auth.client_keys.name，handler 层用 GetString(CtxKeyID) 读取。
+const CtxKeyID = "key_id"
+
+// ClientAuth 校验 Authorization: Bearer <key>，通过后把客户端标识（name）
+// 注入 context 供计量使用。keys 来自静态配置（Week 1 引入，后续替换为 DB 持久化）。
+func ClientAuth(keys []config.ClientKey) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
 		prefix := "Bearer "
@@ -32,9 +33,10 @@ func ClientAuth(keys []string) gin.HandlerFunc {
 			return
 		}
 		presented := []byte(strings.TrimPrefix(auth, prefix))
-		for _, key := range allowed {
+		for _, ck := range keys {
 			// 常量时间比较，避免时序侧信道
-			if subtle.ConstantTimeCompare(presented, key) == 1 {
+			if subtle.ConstantTimeCompare(presented, []byte(ck.Key)) == 1 {
+				c.Set(CtxKeyID, ck.Name)
 				c.Next()
 				return
 			}

@@ -6,10 +6,11 @@ server:
   addr: ":8080"
 
 auth:
-  # 调用方访问本网关时使用的 key（Authorization: Bearer <client_key>）
-  # 生产环境务必改成强随机值
+  # 调用方凭证列表：key 是请求 Authorization: Bearer <key> 中的值，
+  # name 是该 key 的身份标识（token 计量按 name 归属，成本看板按 name 分组）
   client_keys:
-    - "sk-gateway-dev-123456"
+    - name: dev
+      key: "sk-gateway-dev-123456"   # 生产环境务必改成强随机值
 
 # 双维度令牌桶限流（可选，缺省整段省略即不限流）
 # rate_limit:

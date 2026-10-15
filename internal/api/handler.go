@@ -14,25 +14,28 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/GenJi77JYXC/llm-gateway/internal/api/middleware"
+	"github.com/GenJi77JYXC/llm-gateway/internal/config"
 	"github.com/GenJi77JYXC/llm-gateway/internal/gateway"
 	"github.com/GenJi77JYXC/llm-gateway/internal/metrics"
 	"github.com/GenJi77JYXC/llm-gateway/internal/model"
 	"github.com/GenJi77JYXC/llm-gateway/internal/provider"
+	"github.com/GenJi77JYXC/llm-gateway/internal/usage"
 )
 
 // Handler 持有核心层依赖。
 type Handler struct {
-	router *gateway.Router
+	router   *gateway.Router
+	recorder usage.Recorder
 }
 
-// NewHandler 创建 HTTP Handler。
-func NewHandler(r *gateway.Router) *Handler {
-	return &Handler{router: r}
+// NewHandler 创建 HTTP Handler。recorder 为计量器，可为 nil（跳过计量）。
+func NewHandler(r *gateway.Router, recorder usage.Recorder) *Handler {
+	return &Handler{router: r, recorder: recorder}
 }
 
 // RegisterRoutes 在给定 gin 引擎上注册全部路由。
 // limiter 启用时仅对 chat completions 生效（/v1/models 等轻量接口不限流）。
-func (h *Handler) RegisterRoutes(engine *gin.Engine, clientKeys []string, limiter *middleware.RateLimiter) {
+func (h *Handler) RegisterRoutes(engine *gin.Engine, clientKeys []config.ClientKey, limiter *middleware.RateLimiter) {
 	engine.GET("/healthz", h.healthz)
 	engine.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
@@ -91,16 +94,20 @@ func (h *Handler) chatCompletions(c *gin.Context) {
 		Body:   prepared.Body,
 	}
 
+	// 鉴权中间件已注入客户端标识（middleware.CtxKeyID），计量按它归属
+	keyID := c.GetString(middleware.CtxKeyID)
+
 	if prepared.Stream {
-		h.handleStream(c, req, prepared.Model, startedAt)
+		h.handleStream(c, keyID, req, prepared.Model, startedAt)
 		return
 	}
-	h.handleBlocking(c, req, prepared.Model, startedAt)
+	h.handleBlocking(c, keyID, req, prepared.Model, startedAt)
 }
 
 // handleBlocking 处理非流式请求：上游 body 原样透传。fallback 在 gateway 层完成。
 func (h *Handler) handleBlocking(
 	c *gin.Context,
+	keyID string,
 	req *provider.ChatRequest,
 	modelName string,
 	startedAt time.Time,
@@ -130,7 +137,7 @@ func (h *Handler) handleBlocking(
 		return
 	}
 
-	recordUsage(providerName, modelName, res.Usage)
+	h.recordUsage(keyID, providerName, modelName, res.Usage)
 	if ct := res.Header.Get("Content-Type"); ct != "" {
 		c.Header("Content-Type", ct)
 	}
@@ -141,6 +148,7 @@ func (h *Handler) handleBlocking(
 // fallback 仅发生在流建立之前；流建立后中途失败按 interrupted 处理（one-api Q15）。
 func (h *Handler) handleStream(
 	c *gin.Context,
+	keyID string,
 	req *provider.ChatRequest,
 	modelName string,
 	startedAt time.Time,
@@ -215,7 +223,7 @@ func (h *Handler) handleStream(
 			firstChunk = false
 		}
 		if usage != nil {
-			recordUsage(providerName, modelName, usage)
+			h.recordUsage(keyID, providerName, modelName, usage)
 		}
 		if done {
 			doneRendered = true
@@ -274,14 +282,25 @@ func writeStreamError(w http.ResponseWriter, flusher http.Flusher, message strin
 	flusher.Flush()
 }
 
-func recordUsage(providerName, modelName string, usage *model.Usage) {
-	if usage == nil {
+// recordUsage 把上游 usage 记入 Prometheus 全局指标，并生成按 key_id 归属的计量事件。
+func (h *Handler) recordUsage(keyID, providerName, modelName string, u *model.Usage) {
+	if u == nil {
 		return
 	}
 	metrics.TokensTotal.WithLabelValues(providerName, modelName, "prompt").
-		Add(float64(usage.PromptTokens))
+		Add(float64(u.PromptTokens))
 	metrics.TokensTotal.WithLabelValues(providerName, modelName, "completion").
-		Add(float64(usage.CompletionTokens))
+		Add(float64(u.CompletionTokens))
 	metrics.TokensTotal.WithLabelValues(providerName, modelName, "total").
-		Add(float64(usage.TotalTokens))
+		Add(float64(u.TotalTokens))
+
+	if h.recorder != nil {
+		h.recorder.Record(usage.Event{
+			KeyID:            keyID,
+			Model:            modelName,
+			PromptTokens:     u.PromptTokens,
+			CompletionTokens: u.CompletionTokens,
+			TotalTokens:      u.TotalTokens,
+		})
+	}
 }
