@@ -136,6 +136,8 @@ rate_limit:
 | `llmgateway_fallback_total{model,failed_provider}` | Counter | 首字节前失败触发的上游切换次数 |
 | `llmgateway_breaker_state{provider}` | Gauge | 熔断器状态（0=closed, 1=open, 2=half_open） |
 | `llmgateway_rate_limited_total{dimension}` | Counter | 被限流拒绝的请求数（dimension=key/model） |
+| `llmgateway_usage_dropped_total` | Counter | 计量事件丢失数（聚合 channel 满或 Redis 写失败） |
+| `llmgateway_usage_daily_tokens{key_id,model,kind,date}` | Gauge | 按日聚合 token 用量（scrape 时从 Redis 现查，供成本看板） |
 
 ## 设计要点（对照 one-api 的改进）
 

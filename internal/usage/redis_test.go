@@ -94,3 +94,27 @@ func TestRedisRecorderConnectFail(t *testing.T) {
 		t.Fatal("Redis 不可达时应返回错误")
 	}
 }
+
+func TestRedisRecorderDailyUsage(t *testing.T) {
+	r, _ := newTestRedis(t)
+	defer r.Close()
+
+	r.flush([]Event{
+		{KeyID: "dev", Model: "deepseek-chat", PromptTokens: 8, CompletionTokens: 1, TotalTokens: 9},
+		{KeyID: "ci", Model: "gpt-4o", PromptTokens: 3, CompletionTokens: 4, TotalTokens: 7},
+	})
+
+	got, err := r.DailyUsage(context.Background(), time.Now())
+	if err != nil {
+		t.Fatalf("DailyUsage 失败: %v", err)
+	}
+	if got["dev|deepseek-chat|total"] != 9 || got["ci|gpt-4o|prompt"] != 3 {
+		t.Errorf("DailyUsage 读取错误: %v", got)
+	}
+
+	// 无数据的日期返回空 map 而非错误
+	empty, err := r.DailyUsage(context.Background(), time.Now().AddDate(0, 0, -3))
+	if err != nil || len(empty) != 0 {
+		t.Errorf("无数据日期应返回空 map: len=%d err=%v", len(empty), err)
+	}
+}

@@ -5,4 +5,5 @@ global:
 scrape_configs:
   - job_name: llm-gateway
     static_configs:
-      - targets: ["app:8080"]
+      # app = compose 内部服务；host.docker.internal = 宿主机 go run 开发（Docker Desktop 内置解析）
+      - targets: ["app:8080", "host.docker.internal:18080"]

@@ -17,8 +17,10 @@ import (
 	"github.com/GenJi77JYXC/llm-gateway/internal/api/middleware"
 	"github.com/GenJi77JYXC/llm-gateway/internal/config"
 	"github.com/GenJi77JYXC/llm-gateway/internal/gateway"
+	"github.com/GenJi77JYXC/llm-gateway/internal/metrics"
 	"github.com/GenJi77JYXC/llm-gateway/internal/provider/openai"
 	"github.com/GenJi77JYXC/llm-gateway/internal/usage"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {
@@ -58,6 +60,8 @@ func main() {
 			log.Printf("redis %s 不可用，token 计量降级为内存聚合: %v", cfg.Redis.Addr, err)
 		} else {
 			recorder = rr
+			// 按日计量指标：scrape 时从 Redis 现查，供成本看板按 key_id 分组
+			prometheus.MustRegister(metrics.NewUsageDailyCollector(rr))
 			// 优雅停机时排干聚合 channel 再退出（在 server.Shutdown 之后执行）
 			defer func() {
 				if err := rr.Close(); err != nil {

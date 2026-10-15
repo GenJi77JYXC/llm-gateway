@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -64,11 +65,11 @@ func NewRedisRecorder(opts RedisOptions) (*RedisRecorder, error) {
 	}
 
 	client := redis.NewClient(&redis.Options{
-		Addr:        opts.Addr,
-		Password:    opts.Password,
-		DB:          opts.DB,
-		DialTimeout: dialTimeout,
-		ReadTimeout: opTimeout,
+		Addr:         opts.Addr,
+		Password:     opts.Password,
+		DB:           opts.DB,
+		DialTimeout:  dialTimeout,
+		ReadTimeout:  opTimeout,
 		WriteTimeout: opTimeout,
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout+opTimeout)
@@ -97,6 +98,25 @@ func (r *RedisRecorder) Record(ev Event) {
 	default:
 		metrics.UsageDroppedTotal.Inc()
 	}
+}
+
+// DailyUsage 读取指定日期（本地时区）的聚合 hash，返回 {keyID}|{model}|{kind} → token 数。
+// 供指标暴露与看板查询使用；日期无数据时返回空 map。
+func (r *RedisRecorder) DailyUsage(ctx context.Context, day time.Time) (map[string]int64, error) {
+	key := usageKeyPrefix + day.Format(dayLayout)
+	raw, err := r.client.HGetAll(ctx, key).Result()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64, len(raw))
+	for field, val := range raw {
+		n, err := strconv.ParseInt(val, 10, 64)
+		if err != nil {
+			continue // 脏 field 跳过，不影响整体
+		}
+		out[field] = n
+	}
+	return out, nil
 }
 
 // Close 停止接收并等待后台把已接收事件排干落盘后关闭连接。

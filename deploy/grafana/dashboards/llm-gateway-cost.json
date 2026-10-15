@@ -1,0 +1,142 @@
+{
+  "uid": "llm-gateway-cost",
+  "title": "LLM Gateway 成本看板",
+  "tags": ["llm-gateway"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-7d", "to": "now" },
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "templating": {
+    "list": [
+      {
+        "name": "price_prompt",
+        "label": "输入单价 $/1M tokens",
+        "type": "constant",
+        "query": "0.27",
+        "current": { "selected": false, "text": "0.27", "value": "0.27" },
+        "hide": 0
+      },
+      {
+        "name": "price_completion",
+        "label": "输出单价 $/1M tokens",
+        "type": "constant",
+        "query": "1.10",
+        "current": { "selected": false, "text": "1.10", "value": "1.10" },
+        "hide": 0
+      }
+    ]
+  },
+  "annotations": { "list": [] },
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "近 7 天估算成本（USD）",
+      "description": "prompt×输入单价 + completion×输出单价；单价变量在顶部可调（默认 DeepSeek 刊例价）",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum(llmgateway_usage_daily_tokens{kind=\"prompt\"}) * $price_prompt + sum(llmgateway_usage_daily_tokens{kind=\"completion\"}) * $price_completion) / 1000000",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "currencyUSD", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "近 7 天总 token",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "sum(llmgateway_usage_daily_tokens{kind=\"total\"})", "instant": true } ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": null } ] } },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
+    },
+    {
+      "id": 3,
+      "type": "bargauge",
+      "title": "近 7 天 token 按 Key 分布",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "sum by (key_id) (llmgateway_usage_daily_tokens{kind=\"total\"})", "instant": true } ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "continuous-GrYlRd" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } },
+        "overrides": []
+      },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showUnfilled": true }
+    },
+    {
+      "id": 4,
+      "type": "bargauge",
+      "title": "近 7 天 token 按模型分布",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "sum by (model) (llmgateway_usage_daily_tokens{kind=\"total\"})", "instant": true } ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "continuous-BlPu" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": null } ] } },
+        "overrides": []
+      },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showUnfilled": true }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "每日 token 趋势（按 Key）",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (date, key_id) (llmgateway_usage_daily_tokens{kind=\"total\"})",
+          "legendFormat": "{{date}} / {{key_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "showPoints": "never", "spanNulls": true } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "每日输入/输出 token 趋势",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (date, kind) (llmgateway_usage_daily_tokens{kind=~\"prompt|completion\"})",
+          "legendFormat": "{{date}} / {{kind}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "showPoints": "never", "spanNulls": true } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "按日 / Key / 模型 明细",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "llmgateway_usage_daily_tokens", "instant": true, "format": "table" } ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "showHeader": true }
+    }
+  ]
+}
