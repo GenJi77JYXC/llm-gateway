@@ -18,6 +18,7 @@ type Config struct {
 	RateLimit RateLimitConfig  `yaml:"rate_limit"`
 	Redis     RedisConfig      `yaml:"redis"`
 	Cache     CacheConfig      `yaml:"cache"`
+	Embedding EmbeddingConfig  `yaml:"embedding"`
 	Providers []ProviderConfig `yaml:"providers"`
 }
 
@@ -67,6 +68,16 @@ type RedisConfig struct {
 type CacheConfig struct {
 	// ExactTTL 精确缓存有效期（如 "1h"、"30m"）；缺省 1h；显式 "0" = 禁用精确缓存
 	ExactTTL string `yaml:"exact_ttl"`
+}
+
+// EmbeddingConfig 是 embedding API 配置（可选，语义缓存依赖，整段省略 = 不用语义缓存）。
+// 供应商无关：任何 OpenAI 兼容 embedding API 均可（硅基流动 / OpenAI / 智谱）。
+type EmbeddingConfig struct {
+	BaseURL string `yaml:"base_url"` // 如 https://api.siliconflow.cn/v1
+	APIKey  string `yaml:"api_key"`  // 支持 ${ENV} 展开
+	Model   string `yaml:"model"`    // 如 BAAI/bge-m3
+	// Dimensions 向量维度，须与模型实际输出一致（bge-m3=1024，text-embedding-3-small=1536）
+	Dimensions int `yaml:"dimensions"`
 }
 
 // ProviderConfig 描述一个模型上游。
@@ -135,6 +146,16 @@ func (c *Config) validate() error {
 	if c.Cache.ExactTTL != "" {
 		if _, err := time.ParseDuration(c.Cache.ExactTTL); err != nil {
 			return fmt.Errorf("cache.exact_ttl 无法解析: %w", err)
+		}
+	}
+
+	// embedding 段：配置了就必须四项齐全（整段省略则完全跳过语义缓存）
+	if c.Embedding.BaseURL != "" || c.Embedding.APIKey != "" || c.Embedding.Model != "" {
+		if c.Embedding.BaseURL == "" || c.Embedding.APIKey == "" || c.Embedding.Model == "" {
+			return fmt.Errorf("embedding 配置不完整：base_url / api_key / model 须同时提供")
+		}
+		if c.Embedding.Dimensions <= 0 {
+			return fmt.Errorf("embedding.dimensions 须为正整数（bge-m3=1024，text-embedding-3-small=1536）")
 		}
 	}
 

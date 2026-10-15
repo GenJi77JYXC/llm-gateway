@@ -30,6 +30,14 @@ redis:
 cache:
   exact_ttl: "1h"          # 精确缓存有效期（key = SHA256(model+messages)，仅非流式）；"0" = 禁用
 
+# embedding（可选，语义缓存依赖；整段省略 = 只精确缓存）
+# 任何 OpenAI 兼容 embedding API 均可，示例为硅基流动免费的 bge-m3
+embedding:
+  base_url: "https://api.siliconflow.cn/v1"
+  api_key: "${EMBEDDING_API_KEY}"
+  model: "BAAI/bge-m3"
+  dimensions: 1024          # bge-m3=1024；OpenAI text-embedding-3-small=1536
+
 providers:
   # DeepSeek：OpenAI 兼容协议，便宜，适合开发联调
   - name: deepseek
