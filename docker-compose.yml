@@ -47,11 +47,12 @@ services:
     restart: unless-stopped
 
   # Week 3 缓存启用后使用（精确缓存 + 语义向量检索）
+  # 宿主机映射 6380，避开本机常驻的原生 redis-server（6379）
   redis:
     image: redis/redis-stack:7.4.0-v0
     container_name: llmgw-redis
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:6380:6379"
     restart: unless-stopped
 
 volumes:

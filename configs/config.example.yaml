@@ -22,7 +22,7 @@ auth:
 # Redis（可选）：token 计量聚合 + Week 3 缓存。
 # 缺省整段省略 = 不使用 Redis（计量退化为进程内内存聚合，重启即丢）
 redis:
-  addr: "127.0.0.1:6379"
+  addr: "127.0.0.1:6380"   # compose 的 redis-stack 映射在宿主机 6380（6379 留给本机可能已存在的 redis）
   # password: ""
   # db: 0
 
