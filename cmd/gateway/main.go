@@ -45,8 +45,28 @@ func main() {
 	r := gateway.NewRouter(upstreams)
 
 	limiter := middleware.NewRateLimiter(cfg.RateLimit)
-	// 计量器：w3-1 先用内存聚合（重启即丢），w3-2 换 Redis 聚合并保留内存版兜底
-	recorder := usage.NewMem()
+
+	// 计量器（软依赖）：配置了 redis 用 Redis 聚合，连不上/未配置退化为内存聚合
+	var recorder usage.Recorder = usage.NewMem()
+	if cfg.Redis.Addr != "" {
+		rr, err := usage.NewRedisRecorder(usage.RedisOptions{
+			Addr:     cfg.Redis.Addr,
+			Password: cfg.Redis.Password,
+			DB:       cfg.Redis.DB,
+		})
+		if err != nil {
+			log.Printf("redis %s 不可用，token 计量降级为内存聚合: %v", cfg.Redis.Addr, err)
+		} else {
+			recorder = rr
+			// 优雅停机时排干聚合 channel 再退出（在 server.Shutdown 之后执行）
+			defer func() {
+				if err := rr.Close(); err != nil {
+					log.Printf("usage recorder close: %v", err)
+				}
+			}()
+		}
+	}
+
 	server := api.NewHTTPServer(cfg.Server.Addr, cfg.Auth.ClientKeys, r, limiter, recorder)
 
 	// 优雅停机：收到 SIGINT/SIGTERM 后停止接收新连接，等待在途请求完成（最多 15s）

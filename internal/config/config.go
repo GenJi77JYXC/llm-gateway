@@ -15,6 +15,7 @@ type Config struct {
 	Server    ServerConfig     `yaml:"server"`
 	Auth      AuthConfig       `yaml:"auth"`
 	RateLimit RateLimitConfig  `yaml:"rate_limit"`
+	Redis     RedisConfig      `yaml:"redis"`
 	Providers []ProviderConfig `yaml:"providers"`
 }
 
@@ -50,6 +51,14 @@ type RateLimitConfig struct {
 	ModelQPS float64 `yaml:"model_qps"`
 	// ModelBurst model 维度突发容量，缺省按 max(1, ModelQPS) 处理
 	ModelBurst int `yaml:"model_burst"`
+}
+
+// RedisConfig 是 Redis 连接配置（可选）。
+// Week 3 起用于计量聚合与缓存；缺省整段省略 = 不使用 Redis（计量退化为内存聚合）。
+type RedisConfig struct {
+	Addr     string `yaml:"addr"`
+	Password string `yaml:"password"`
+	DB       int    `yaml:"db"`
 }
 
 // ProviderConfig 描述一个模型上游。

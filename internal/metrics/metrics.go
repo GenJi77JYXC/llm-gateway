@@ -76,6 +76,13 @@ var (
 		Name:      "rate_limited_total",
 		Help:      "Requests rejected by rate limiting.",
 	}, []string{"dimension"})
+
+	// UsageDroppedTotal 计量事件丢失数（聚合 channel 满或 Redis 写失败）。
+	UsageDroppedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "usage_dropped_total",
+		Help:      "Usage events dropped (aggregation channel full or Redis write failed).",
+	})
 )
 
 // StreamLabel 将 bool 转为指标 label，避免调用处散落字符串。
