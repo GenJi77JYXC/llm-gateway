@@ -15,6 +15,7 @@ import (
 
 	"github.com/GenJi77JYXC/llm-gateway/internal/api"
 	"github.com/GenJi77JYXC/llm-gateway/internal/api/middleware"
+	"github.com/GenJi77JYXC/llm-gateway/internal/breaker"
 	"github.com/GenJi77JYXC/llm-gateway/internal/cache"
 	"github.com/GenJi77JYXC/llm-gateway/internal/config"
 	"github.com/GenJi77JYXC/llm-gateway/internal/embedding"
@@ -46,9 +47,38 @@ func main() {
 		}, httpClient)
 		upstreams = append(upstreams, gateway.Upstream{Provider: p, Weight: pc.Weight})
 	}
-	r := gateway.NewRouter(upstreams)
 
 	limiter := middleware.NewRateLimiter(cfg.RateLimit)
+
+	// 熔断器（软依赖）：Redis 可用时多实例经 Redis 广播跳闸状态（T4.4），
+	// 未配置/连不上/单实例退化为进程内内存熔断。
+	// 每个上游实例一个熔断器，Redis 键按上游名区分。
+	var sharedBreakers []*breaker.Shared
+	defer func() {
+		for _, b := range sharedBreakers {
+			_ = b.Close()
+		}
+	}()
+	breakerFactory := func(name string) breaker.Interface {
+		if cfg.Redis.Addr == "" {
+			return breaker.New(breaker.DefaultMaxFailures, breaker.DefaultCooldown)
+		}
+		sb, err := breaker.NewShared(breaker.SharedOptions{
+			Name:        name,
+			MaxFailures: breaker.DefaultMaxFailures,
+			Cooldown:    breaker.DefaultCooldown,
+			Addr:        cfg.Redis.Addr,
+			Password:    cfg.Redis.Password,
+			DB:          cfg.Redis.DB,
+		})
+		if err != nil {
+			log.Printf("breaker(%s) redis 不可用，降级为内存熔断: %v", name, err)
+			return breaker.New(breaker.DefaultMaxFailures, breaker.DefaultCooldown)
+		}
+		sharedBreakers = append(sharedBreakers, sb)
+		return sb
+	}
+	r := gateway.NewRouterWithFactory(upstreams, breakerFactory)
 
 	// 计量器（软依赖）：配置了 redis 用 Redis 聚合，连不上/未配置退化为内存聚合
 	var recorder usage.Recorder = usage.NewMem()

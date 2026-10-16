@@ -15,11 +15,7 @@ import (
 	"github.com/GenJi77JYXC/llm-gateway/internal/provider"
 )
 
-// 熔断策略默认值（暂未开放配置）：同一上游连续失败 3 次熔断，冷却 30s 后半开探测。
-const (
-	defaultMaxFailures = 3
-	defaultCooldown    = 30 * time.Second
-)
+// 熔断策略默认值见 breaker.DefaultMaxFailures / breaker.DefaultCooldown（暂未开放配置）。
 
 // Upstream 是某个模型的一个候选上游：Provider 实例 + 配置权重。
 type Upstream struct {
@@ -31,8 +27,12 @@ type Upstream struct {
 // candidate 是路由内部候选：上游 + 熔断器（同一上游实例跨 model 共享一个熔断器）。
 type candidate struct {
 	p  provider.Provider
-	br *breaker.Breaker
+	br breaker.Interface
 }
+
+// BreakerFactory 为每个上游实例构造熔断器。
+// 注入点：多实例部署时用 Redis 共享版（breaker.Shared），单实例用内存版（breaker.New）。
+type BreakerFactory func(upstreamName string) breaker.Interface
 
 // modelRoute 是一个模型的路由：加权负载均衡 + 完整候选列表（fallback 遍历用）。
 type modelRoute struct {
@@ -48,22 +48,34 @@ type Router struct {
 	models  []string          // 排好序，保证 /v1/models 输出稳定
 }
 
-// NewRouter 构造路由器（使用默认熔断策略）。
+// NewRouter 构造路由器（默认内存熔断策略）。
 func NewRouter(upstreams []Upstream) *Router {
-	return newRouter(upstreams, defaultMaxFailures, defaultCooldown)
+	return newRouter(upstreams, breaker.DefaultMaxFailures, breaker.DefaultCooldown)
+}
+
+// NewRouterWithFactory 构造路由器并注入自定义熔断器工厂（如 Redis 共享版），
+// 供多实例部署时跨实例共享跳闸状态。
+func NewRouterWithFactory(upstreams []Upstream, f BreakerFactory) *Router {
+	return buildRouter(upstreams, f)
 }
 
 // newRouter 允许测试注入熔断策略。
 func newRouter(upstreams []Upstream, maxFailures int, cooldown time.Duration) *Router {
+	return buildRouter(upstreams, func(string) breaker.Interface {
+		return breaker.New(maxFailures, cooldown)
+	})
+}
+
+func buildRouter(upstreams []Upstream, f BreakerFactory) *Router {
 	r := &Router{
 		byModel: make(map[string]*modelRoute),
 		owners:  make(map[string]string),
 	}
 
 	// 每个上游实例一个熔断器，跨其所有 model 共享
-	breakers := make([]*breaker.Breaker, len(upstreams))
-	for i := range upstreams {
-		breakers[i] = breaker.New(maxFailures, cooldown)
+	breakers := make([]breaker.Interface, len(upstreams))
+	for i, u := range upstreams {
+		breakers[i] = f(u.Provider.Name())
 	}
 
 	candidates := make(map[string][]*candidate)

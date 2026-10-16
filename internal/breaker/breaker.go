@@ -24,6 +24,22 @@ const (
 	StateHalfOpen
 )
 
+// 默认熔断策略：同一上游连续失败 3 次熔断，冷却 30s 后半开探测。
+// 由 gateway 与 main 装配共享，避免两处各写一份魔法数。
+const (
+	DefaultMaxFailures = 3
+	DefaultCooldown    = 30 * time.Second
+)
+
+// Interface 是熔断器抽象：进程内内存版（Breaker）与多实例共享版（Shared）均实现。
+// 调用方（gateway 路由）只依赖此接口，不关心状态是否经 Redis 广播。
+type Interface interface {
+	Allow() bool
+	OnSuccess()
+	OnFailure()
+	State() State
+}
+
 // String 返回状态名，用于日志与指标 label。
 func (s State) String() string {
 	switch s {
