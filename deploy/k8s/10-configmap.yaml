@@ -1,0 +1,51 @@
+# 网关非敏感配置（敏感 API Key 走 Secret 环境变量注入，见 secret.example.yaml）
+# 与本地 configs/config.example.yaml 的差异仅 redis.addr 指向集群内 Service
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-gateway-config
+  namespace: llm-gateway
+data:
+  config.yaml: |
+    server:
+      addr: ":8080"
+
+    auth:
+      client_keys:
+        - name: dev
+          key: "sk-gateway-dev-123456"   # 演示用，生产务必换成强随机值
+
+    # Redis：token 计量聚合 + 两级缓存；addr 指向下方 20-redis.yaml 的 Service
+    redis:
+      addr: "redis:6379"
+
+    # 响应缓存（依赖 redis）
+    cache:
+      exact_ttl: "1h"            # 精确缓存；"0" = 禁用
+      semantic_threshold: 0.95   # 语义缓存命中所需余弦相似度
+
+    # embedding（语义缓存依赖，任何 OpenAI 兼容 embedding API）
+    embedding:
+      base_url: "https://api.siliconflow.cn/v1"
+      api_key: "${EMBEDDING_API_KEY}"
+      model: "BAAI/bge-m3"
+      dimensions: 1024
+
+    providers:
+      - name: deepseek
+        type: openai
+        base_url: "https://api.deepseek.com/v1"
+        api_key: "${DEEPSEEK_API_KEY}"
+        models:
+          - "deepseek-chat"
+          - "deepseek-reasoner"
+        weight: 3
+
+      - name: openai
+        type: openai
+        base_url: "https://api.openai.com/v1"
+        api_key: "${OPENAI_API_KEY}"
+        models:
+          - "gpt-4o-mini"
+          - "gpt-4o"
+        weight: 1

@@ -1,0 +1,5 @@
+# 独立命名空间，方便一键清理：kubectl delete namespace llm-gateway
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llm-gateway

@@ -6,6 +6,7 @@ bin/
 # 本地环境与配置
 .env
 configs/config.yaml
+deploy/k8s/secret.yaml
 
 # 本地设计笔记/学习文档，不公开
 docs/
