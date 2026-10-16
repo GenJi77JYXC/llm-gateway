@@ -1,6 +1,10 @@
 # ---- 构建阶段 ----
 FROM golang:1.26-alpine AS builder
 
+# Go 模块代理，默认与官方一致；国内构建可 --build-arg GOPROXY=https://goproxy.cn,direct
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
+
 WORKDIR /build
 
 # 先拷依赖文件利用层缓存
