@@ -1,8 +1,26 @@
 # LLM Gateway
 
-一个用 Go 实现的 LLM 推理网关：统一 OpenAI 兼容协议接入多家大模型，提供流式透传、加权负载均衡、熔断降级、限流、可观测性。
+一个用 Go 实现的 LLM 推理网关：统一 OpenAI 兼容协议接入多家大模型，提供流式透传、加权负载均衡、熔断降级、限流、两级缓存与可观测性，支持 K8s 一键部署与 HPA 自动扩缩容。
 
-> 当前进度：**Week 3（成本管控与缓存）**：计量聚合 / 成本看板 / 两级缓存已完成，后续 Week 4 K8s 部署。
+> 当前进度：**4 周路线图全部完成** ✅（核心转发 → 路由可靠性 → 成本与缓存 → K8s 部署）
+
+## 架构图
+
+```
+客户端 (OpenAI 兼容协议, Bearer 鉴权)
+   │  POST /v1/chat/completions   GET /v1/models
+   ▼
+┌─ llm-gateway（K8s Deployment，HPA 2~5 副本） ──────────────┐
+│ API 层(gin)：鉴权 → 双维度令牌桶限流 → Prometheus 指标      │
+│ 核心层：精确缓存 → 语义缓存(向量) → 按 model 路由           │
+│   ├─ 多上游平滑加权轮询(SWRR) + 首字节前失败 fallback       │
+│   └─ 三态熔断器：跳闸状态经 Redis 广播，多副本一致(≤500ms)  │
+└──────┬──────────────────┬───────────────────┬─────────────┘
+       │ 回源              │ 缓存/计量/熔断      │ 指标
+       ▼                  ▼                   ▼
+  OpenAI 兼容上游      Redis Stack        Prometheus → Grafana
+ (DeepSeek/OpenAI…)  (向量/计量/熔断共享)   （成本/命中率看板）
+```
 
 ## 功能
 
@@ -19,6 +37,8 @@
 - Prometheus 指标：QPS、延迟分位、TTFT、token 用量、fallback/熔断/限流计数
 - 客户端断开立即取消上游请求（`context.Context` 贯穿全链路）
 - Docker Compose 一键起：app + Prometheus + Grafana（+ Redis，Week 3 启用）
+- K8s 一键部署：`kubectl apply -f deploy/k8s/`（Deployment/Service/ConfigMap/Secret/Redis + 健康探针）
+- HPA 按 CPU 自动扩缩容（2~5 副本）；熔断器跳闸状态经 Redis 广播，多副本一致
 
 ## 架构分层
 
@@ -37,6 +57,7 @@ internal/metrics     Prometheus 指标定义
 internal/usage       token 计量（内存聚合 / Redis 异步批量聚合，按 key+model+日期）
 internal/cache       两级缓存：Exact（SHA256 精确）+ Semantic（Redis Stack 向量检索）
 internal/embedding   OpenAI 兼容 embedding 客户端（语义缓存向量化）
+deploy/k8s           K8s manifests（Deployment/Service/ConfigMap/Secret/Redis/HPA）
 scripts/mockupstream 本地联调用假上游（支持延迟/错误率故障注入）
 scripts/benchmark    压测负载发生器（客户端侧测延迟分位、TTFT、吞吐）
 ```
@@ -77,6 +98,30 @@ make docker-up
 # app       http://127.0.0.1:8080
 # grafana   http://127.0.0.1:3000  (admin/admin)
 # prometheus http://127.0.0.1:9090
+```
+
+### 5. Kubernetes（kind 复现，约 10 分钟）
+
+```bash
+# 1. 构建镜像（国内构建加 --build-arg GOPROXY=https://goproxy.cn,direct）
+docker build -t llm-gateway:local .
+
+# 2. 创建 kind 集群并加载镜像（免节点外网拉取）
+kind create cluster
+kind load docker-image llm-gateway:local redis/redis-stack:7.4.0-v0
+
+# 3. 填入真实上游凭证（secret.yaml 已被 .gitignore 忽略）
+cp deploy/k8s/10-secret.example.yaml deploy/k8s/secret.yaml
+
+# 4. 一键部署（命名空间/配置/凭证/Redis/网关 2 副本）
+kubectl apply -f deploy/k8s/
+
+# 5. 验证
+kubectl port-forward svc/llm-gateway 8080:80 -n llm-gateway
+curl http://127.0.0.1:8080/healthz
+
+# 6. HPA 演示（需 metrics-server；kind 需 --kubelet-insecure-tls 补丁，见 T4.3 commit 说明）
+kubectl scale deployment llm-gateway --replicas=3 -n llm-gateway   # 手动扩缩容
 ```
 
 ## 使用示例
@@ -166,8 +211,16 @@ rate_limit:
 | 单进程 QPS 上限 | ≈9,000 req/s |
 | 流式吞吐损耗 | ≈0（经网关 131.3 vs 直连 132.0 QPS） |
 
+K8s（kind 单节点，2 副本 requests cpu=50m）环境实测：
+
+| 指标 | 数值 |
+|---|---|
+| HPA 扩容 | CPU 冲 502% 时 2→5 副本，决策 ≈64s；负载停止后 5 分钟窗口缩回 |
+| 手动扩容 2→3 | 新副本 6.7s 就绪接流量（readiness 探针门控） |
+| 多副本熔断一致 | 跳闸经 Redis 广播，感知延迟 ≤500ms |
+
 ## Roadmap
 
 - ~~Week 2：负载均衡（加权轮询）、熔断、fallback、限流、压测~~ ✅
-- Week 3：token 计量聚合与成本看板、精确缓存、语义缓存（Redis Stack 向量检索）
-- Week 4：K8s Deployment + HPA、多实例熔断状态共享
+- ~~Week 3：token 计量聚合与成本看板、精确缓存、语义缓存（Redis Stack 向量检索）~~ ✅
+- ~~Week 4：K8s Deployment + HPA、多实例熔断状态共享~~ ✅
